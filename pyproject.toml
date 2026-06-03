@@ -1,0 +1,112 @@
+[project]
+name = "spcedp"
+version = "1.0.0"
+description = "Async Python SDK for Vanderbilt SPC alarm panels (direct EDP v2)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Ian Duffy", email = "ian@ianduffy.ie" }]
+license = { text = "MIT" }
+keywords = ["vanderbilt", "spc", "alarm", "edp", "home-assistant", "asyncio"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: Security",
+]
+dependencies = [
+    "cryptography>=43",   # for AES-128-ECB (optional EDP frame encryption)
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
+    "pytest-cov>=5",
+]
+dev = ["ruff>=0.6", "pylint>=3.2", "mypy>=1.10"]
+
+[project.urls]
+Homepage = "https://github.com/imduffy15/spcedp"
+Repository = "https://github.com/imduffy15/spcedp"
+Issues = "https://github.com/imduffy15/spcedp/issues"
+"Protocol notes" = "https://github.com/imduffy15/spcedp/blob/main/PROTOCOL.md"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["spcedp*"]
+
+[tool.setuptools.package-data]
+spcedp = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+
+[tool.coverage.run]
+source = ["spcedp"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover"]
+# Coverage is advisory for now. Once a stable baseline is measured, a
+# `fail_under = <baseline>` gate can be enabled here (and `--cov-fail-under`
+# wired into CI) and ratcheted upward as gaps close.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["RUF022"]  # keep __all__ grouped by category, not alphabetical
+
+[tool.ruff.lint.per-file-ignores]
+# pytest.importorskip("cryptography") must run before importing the modules
+# that need it, so those imports are deliberately not at the top of the file.
+"tests/test_encryption.py" = ["E402"]
+# The session test helper returns a fixed (sess, writer, server, wt) tuple;
+# individual tests use different subsets, so some slots go unused.
+"tests/*" = ["RUF059"]
+
+[tool.pylint.main]
+py-version = "3.10"
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.design]
+max-locals = 18  # Frame.decode unpacks the header field-by-field
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-class-docstring",       # thin control wrappers are self-explanatory
+    "missing-function-docstring",    # ditto for one-line command methods
+    "too-few-public-methods",        # dataclasses / control wrappers
+    "too-many-arguments",            # Frame / Session frame builders
+    "too-many-positional-arguments",
+    "too-many-instance-attributes",  # Session / Frame carry real state
+    "duplicate-code",                # the *Control wrappers are intentionally parallel
+    "protected-access",              # PanelServer drives Session/decoder internals (same package)
+    "broad-exception-caught",        # intentional log-and-continue in teardown / event callbacks
+    "import-outside-toplevel",       # cryptography is imported lazily, only when encryption is used
+]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["spcedp"]
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = true

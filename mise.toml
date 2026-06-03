@@ -1,0 +1,5 @@
+# Tooling pin (https://mise.jdx.dev). mise installs uv; uv then manages the
+# Python toolchain (from .python-version / pyproject's requires-python) and the
+# project virtualenv. Run `mise install`, then use uv as usual (`uv run ...`).
+[tools]
+uv = "latest"

@@ -264,7 +264,7 @@ def _drive_decoder(data: bytes, chunk: int, *, key: bytes | None) -> None:
         fed += len(piece)
         try:
             dec.feed(piece)
-        except FrameDecodeError, EncryptionRequired:
+        except (FrameDecodeError, EncryptionRequired):
             # Recoverable/observable failure; the decoder may keep going or be
             # abandoned. Either way it did not hang or raise a foreign type.
             return

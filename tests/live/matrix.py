@@ -532,7 +532,7 @@ async def run_campaign(args: argparse.Namespace) -> int:
                     completed_steps.add(step_name)
                 try:
                     await step_fn()
-                except SpcConnectionLost, ConnectionResetError:
+                except (SpcConnectionLost, ConnectionResetError):
                     raise  # resume after re-dial (actuate-once steps won't repeat)
                 except SafetyAbort:
                     raise  # armed/unsafe: abort the whole run
@@ -548,7 +548,7 @@ async def run_campaign(args: argparse.Namespace) -> int:
             # An armed/unsafe panel stops the whole run immediately.
             aborted.append(str(exc))
             done.set()
-        except SpcConnectionLost, ConnectionResetError:
+        except (SpcConnectionLost, ConnectionResetError):
             log.warning("attempt %d: session dropped; will resume on the panel's re-dial", attempt)
             if attempt >= max_attempts:
                 log.error("giving up after %d attempt(s)", attempt)

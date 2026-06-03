@@ -3,7 +3,7 @@ name = "spcedp"
 version = "1.0.0"
 description = "Async Python SDK for Vanderbilt SPC alarm panels (direct EDP v2)"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 authors = [{ name = "Ian Duffy", email = "ian@ianduffy.ie" }]
 license = { text = "MIT" }
 keywords = ["vanderbilt", "spc", "alarm", "edp", "home-assistant", "asyncio"]
@@ -15,6 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Home Automation",
     "Topic :: Security",
@@ -68,7 +69,7 @@ python-preference = "only-system"
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
@@ -83,7 +84,7 @@ ignore = ["RUF022"]  # keep __all__ grouped by category, not alphabetical
 "tests/*" = ["RUF059"]
 
 [tool.pylint.main]
-py-version = "3.14"
+py-version = "3.13"
 
 [tool.pylint.format]
 max-line-length = 100
@@ -109,7 +110,7 @@ disable = [
 ]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.13"
 files = ["spcedp"]
 disallow_untyped_defs = true
 warn_unused_ignores = true

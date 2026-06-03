@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Portability:
+
+- Lowered `requires-python` to **>=3.13** (was 3.14). The only thing that
+  required 3.14 was an unparenthesized `except A, B:` (PEP 758) in
+  `PanelServer._handle` (plus a few test helpers); these are now the portable
+  `except (A, B):` form. The full suite passes on both 3.13 and 3.14. This lets
+  the library install on a stock Home Assistant runtime (currently Python 3.13).
+
 Additive, backward-compatible public-API additions (driven by the Home Assistant
 integration):
 

@@ -575,7 +575,7 @@ class PanelServer:
                         session_task.add_done_callback(
                             lambda t: self._on_session_done(t, session, peer)
                         )
-        except ConnectionResetError, BrokenPipeError:
+        except (ConnectionResetError, BrokenPipeError):
             pass
         finally:
             await self._teardown(session, decoder, writer, (writer_task, session_task), peer)

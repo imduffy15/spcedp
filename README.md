@@ -58,8 +58,8 @@ the binary opcode table (§2.4), the checksum (§2.5), the SIA event format
 
 ## Install
 
-Needs Python 3.14. The only runtime dependency is `cryptography`, used for
-the optional AES frame encryption.
+Needs Python 3.13+ (tested on 3.13 and 3.14). The only runtime dependency is
+`cryptography`, used for the optional AES frame encryption.
 
 Add it to a project with [`uv`](https://github.com/astral-sh/uv):
 

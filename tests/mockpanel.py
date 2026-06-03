@@ -225,7 +225,7 @@ class MockPanel:
                     return  # receiver closed the connection
                 for frame in self._decoder.feed(chunk):
                     self._inbound.put_nowait(frame)
-        except asyncio.CancelledError, ConnectionResetError, BrokenPipeError:
+        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
             return
         except Exception:  # pragma: no cover - defensive, keep the pump quiet
             log.debug("mock panel read pump stopped on error", exc_info=True)
@@ -440,7 +440,7 @@ class MockPanel:
                 for frame in self._decoder.feed(chunk):
                     self._inbound.put_nowait(frame)
                 await asyncio.sleep(0.01)
-        except asyncio.CancelledError, ConnectionResetError, BrokenPipeError:
+        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
             return
 
     async def disconnect(self, *, abortive: bool = False) -> None:

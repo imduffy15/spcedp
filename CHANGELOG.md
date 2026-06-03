@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Additive, backward-compatible public-API additions (driven by the Home Assistant
+integration):
+
+- `ZoneType` enum (exported) plus `Zone.zone_type`, a typed view of the raw
+  `Zone.type` token mirroring `Area.arm_mode`. It is the full SPC zone-input-type
+  catalogue (`ALARM=0`, `ENTRY_EXIT=1`, `FIRE=3`, … `ENTRY_EXIT_2=30`);
+  unrecognised or missing tokens return `None` rather than guessing.
+- `Area.last_set_user_name` / `Area.last_set_user_id`, read from the
+  `AREA_STATUS` reply alongside the existing `last_unset_user_*` fields, so a
+  consumer can attribute a *set* (arm) to a user, not just an unset (disarm).
+- `AreaControl` arm/disarm methods now document that the panel drops and
+  re-establishes the EDP session on set/unset (PROTOCOL.md §2.4): the command
+  can raise `SpcConnectionLost`/`SpcTimeout` even when applied; treat that as
+  "applied, expect a re-dial" and resync from the new session.
+
 ## 1.0.0 - 2026-06-03
 
 First stable release. Hardening pass toward a stable release. Behaviour changes plus a much larger

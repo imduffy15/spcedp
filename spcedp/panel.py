@@ -54,6 +54,50 @@ class ArmMode(enum.Enum):
     FULL = "3"
 
 
+class ZoneType(enum.Enum):
+    """Decoded function/type of a :class:`Zone`.
+
+    Keyed off the panel's raw ``TYPE`` token (a numeric string).  The
+    enumeration is the SPC zone-input-type catalogue - the same codes the SPC
+    Web Gateway surfaces - and was cross-checked against a live SPC4300 (e.g.
+    an entry/exit hallway reports ``TYPE="1"``).  An unrecognised token maps to
+    ``None`` (see ``Zone.zone_type``), never silently to a wrong type; the raw
+    ``type`` string stays the source of truth for diagnostics.
+    """
+
+    ALARM = "0"
+    ENTRY_EXIT = "1"
+    EXIT_TERMINATOR = "2"
+    FIRE = "3"
+    FIRE_EXIT = "4"
+    LINE = "5"
+    PANIC = "6"
+    HOLD_UP = "7"
+    TAMPER = "8"
+    TECHNICAL = "9"
+    MEDICAL = "10"
+    KEYARM = "11"
+    UNUSED = "12"
+    SHUNT = "13"
+    X_SHUNT = "14"
+    FAULT = "15"
+    LOCK_SUPERVISION = "16"
+    SEISMIC = "17"
+    ALL_OKAY = "18"
+    HOLDUP_FAULT = "19"
+    WARNING_FAULT = "20"
+    SETTING_AUTHORISATION = "21"
+    LOCK_ELEMENT = "22"
+    GLASSBREAK = "23"
+    WATER = "24"
+    HEAT = "25"
+    FRIDGE_FREEZER = "26"
+    GAS = "27"
+    SPRINKLER = "28"
+    CO = "29"
+    ENTRY_EXIT_2 = "30"
+
+
 # ---------------------------------------------------------------------------
 # Plain dataclasses for snapshot state
 # ---------------------------------------------------------------------------
@@ -110,6 +154,8 @@ class Area:
     mode: str = "0"
     last_set_time: str = ""
     last_unset_time: str = ""
+    last_set_user_id: str = ""
+    last_set_user_name: str = ""
     last_unset_user_id: str = ""
     last_unset_user_name: str = ""
     last_alarm: str = ""
@@ -150,6 +196,8 @@ class Area:
             mode=row.get("MODE", "0"),
             last_set_time=row.get("LAST_SET_TIME", ""),
             last_unset_time=row.get("LAST_UNSET_TIME", ""),
+            last_set_user_id=row.get("LAST_SET_USER_ID", ""),
+            last_set_user_name=row.get("LAST_SET_USER_NAME", ""),
             last_unset_user_id=row.get("LAST_UNSET_USER_ID", ""),
             last_unset_user_name=row.get("LAST_UNSET_USER_NAME", ""),
             last_alarm=row.get("LAST_ALARM", ""),
@@ -189,6 +237,23 @@ class Zone:
         if self.status == "0":
             return False
         return None
+
+    @property
+    def zone_type(self) -> ZoneType | None:
+        """Typed view of the raw ``type`` token.
+
+        Returns the matching :class:`ZoneType`, or ``None`` when the zone
+        reports no type or a token this release does not recognise - an unknown
+        value is never silently mapped to a wrong type.  The raw ``type`` string
+        stays the source of truth for diagnostics.
+        """
+        if not self.type:
+            return None
+        try:
+            return ZoneType(self.type)
+        except ValueError:
+            log.warning("zone %d has unrecognised TYPE token %r", self.id, self.type)
+            return None
 
     @classmethod
     def from_row(cls, row: Row) -> Zone | None:
@@ -523,7 +588,17 @@ class ZoneControl:
 
 
 class AreaControl:
-    """Arm / disarm controls (verified live)."""
+    """Arm / disarm controls (verified live).
+
+    IMPORTANT: issuing any of these (area set/unset/part-set) makes the panel
+    drop and re-establish the EDP session (see ``PROTOCOL.md`` §2.4). The panel
+    often disconnects before it sends the 1-byte reply, so the command can raise
+    ``SpcConnectionLost`` (or ``SpcTimeout``) even though it was applied. A caller
+    should treat a connection error from these methods as "probably applied,
+    expect the panel to re-dial shortly" and resync from the new session rather
+    than surfacing it as a failure. A ``PanelRejected`` (e.g. engineer mode) is a
+    genuine rejection.
+    """
 
     def __init__(self, sess: Session, area_id: int):
         self._s = sess

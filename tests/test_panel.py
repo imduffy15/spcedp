@@ -12,9 +12,55 @@ import pytest
 
 from spcedp.commands import BinaryOp, PanelOp
 from spcedp.events import SiaEvent
-from spcedp.panel import Panel
+from spcedp.panel import Area, Panel, Zone, ZoneType
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_zone_type_decodes_known_token() -> None:
+    # TYPE="1" is the entry/exit input type (cross-checked live: a hallway zone).
+    zone = Zone.from_row({"ID": "5", "ZONE_NAME": "Hall", "TYPE": "1", "AREA": "1"})
+    assert zone is not None
+    assert zone.type == "1"  # raw token preserved
+    assert zone.zone_type is ZoneType.ENTRY_EXIT
+
+
+async def test_zone_type_maps_the_full_catalogue() -> None:
+    # Every documented TYPE token round-trips to its ZoneType member.
+    for member in ZoneType:
+        zone = Zone.from_row({"ID": "1", "ZONE_NAME": "z", "TYPE": member.value, "AREA": "1"})
+        assert zone is not None
+        assert zone.zone_type is member
+
+
+async def test_zone_type_unknown_or_missing_is_none() -> None:
+    # An unrecognised token is never silently mapped to a wrong type.
+    unknown = Zone.from_row({"ID": "1", "ZONE_NAME": "z", "TYPE": "999", "AREA": "1"})
+    assert unknown is not None
+    assert unknown.zone_type is None
+    # A zone reporting no type at all is None too, without a spurious warning path.
+    missing = Zone.from_row({"ID": "2", "ZONE_NAME": "z", "AREA": "1"})
+    assert missing is not None
+    assert missing.type == ""
+    assert missing.zone_type is None
+
+
+async def test_area_captures_last_set_user() -> None:
+    # changed_by parity: the set-user fields are read when the panel reports them.
+    area = Area.from_row(
+        {
+            "ID": "1",
+            "NAME": "Home",
+            "MODE": "3",
+            "LAST_SET_USER_ID": "7",
+            "LAST_SET_USER_NAME": "Alice",
+            "LAST_UNSET_USER_NAME": "Bob",
+        }
+    )
+    assert area is not None
+    assert area.last_set_user_id == "7"
+    assert area.last_set_user_name == "Alice"
+    assert area.last_unset_user_name == "Bob"
 
 
 class FakeSession:

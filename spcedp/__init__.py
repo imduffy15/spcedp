@@ -33,7 +33,7 @@ from .errors import (
     reply_message,
 )
 from .events import SiaEvent
-from .panel import Area, ArmMode, Door, Output, Panel, PanelInfo, Zone
+from .panel import Area, ArmMode, Door, Output, Panel, PanelInfo, Zone, ZoneType
 from .wire import EncryptionRequired, Frame, FrameDecodeError, FrameDecoder, MajorCode, MinorCode
 from .xmlcmd import AttrValue, Row, XmlReply
 
@@ -51,6 +51,7 @@ __all__ = [
     "Area",
     "ArmMode",
     "Zone",
+    "ZoneType",
     "Output",
     "Door",
     "SiaEvent",

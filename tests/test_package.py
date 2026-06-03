@@ -81,6 +81,7 @@ GOLDEN_ALL = [
     "XML_ZONE_STATUS",
     "XmlReply",
     "Zone",
+    "ZoneType",
     "reply_message",
 ]
 
@@ -108,6 +109,7 @@ GOLDEN_SIGNATURES = {
     "Area": (
         "(id: 'int', name: 'str' = '', mode: 'str' = '0', "
         "last_set_time: 'str' = '', last_unset_time: 'str' = '', "
+        "last_set_user_id: 'str' = '', last_set_user_name: 'str' = '', "
         "last_unset_user_id: 'str' = '', last_unset_user_name: 'str' = '', "
         "last_alarm: 'str' = '', not_ready_set: 'str' = '') -> None"
     ),
@@ -162,6 +164,7 @@ GOLDEN_SIGNATURES = {
         "input: 'str', logic_input: 'str', status: 'str', proc_state: 'str', "
         "inhibit_allowed: 'bool', isolate_allowed: 'bool') -> None"
     ),
+    "ZoneType": "(*values)",
     "reply_message": "(code: 'int') -> 'str'",
 }
 
@@ -279,6 +282,8 @@ GOLDEN_DATACLASS_FIELDS = {
         "mode",
         "last_set_time",
         "last_unset_time",
+        "last_set_user_id",
+        "last_set_user_name",
         "last_unset_user_id",
         "last_unset_user_name",
         "last_alarm",
@@ -394,6 +399,39 @@ GOLDEN_ENUM_MEMBERS = {
         "PART_B": "2",
         "FULL": "3",
     },
+    "ZoneType": {
+        "ALARM": "0",
+        "ENTRY_EXIT": "1",
+        "EXIT_TERMINATOR": "2",
+        "FIRE": "3",
+        "FIRE_EXIT": "4",
+        "LINE": "5",
+        "PANIC": "6",
+        "HOLD_UP": "7",
+        "TAMPER": "8",
+        "TECHNICAL": "9",
+        "MEDICAL": "10",
+        "KEYARM": "11",
+        "UNUSED": "12",
+        "SHUNT": "13",
+        "X_SHUNT": "14",
+        "FAULT": "15",
+        "LOCK_SUPERVISION": "16",
+        "SEISMIC": "17",
+        "ALL_OKAY": "18",
+        "HOLDUP_FAULT": "19",
+        "WARNING_FAULT": "20",
+        "SETTING_AUTHORISATION": "21",
+        "LOCK_ELEMENT": "22",
+        "GLASSBREAK": "23",
+        "WATER": "24",
+        "HEAT": "25",
+        "FRIDGE_FREEZER": "26",
+        "GAS": "27",
+        "SPRINKLER": "28",
+        "CO": "29",
+        "ENTRY_EXIT_2": "30",
+    },
 }
 
 
@@ -419,6 +457,8 @@ def test_intenum_and_strenum_kinds_are_frozen() -> None:
     # ArmMode stays a plain str-valued Enum (its values are the raw MODE tokens).
     for name in ("BinaryOp", "PanelOp", "ReplyCode", "MajorCode", "MinorCode"):
         assert issubclass(getattr(spcedp, name), enum.IntEnum), f"{name} is no longer IntEnum"
-    assert issubclass(spcedp.ArmMode, enum.Enum)
-    assert not issubclass(spcedp.ArmMode, enum.IntEnum)
-    assert all(isinstance(m.value, str) for m in spcedp.ArmMode)
+    for name in ("ArmMode", "ZoneType"):
+        cls = getattr(spcedp, name)
+        assert issubclass(cls, enum.Enum), f"{name} is no longer an Enum"
+        assert not issubclass(cls, enum.IntEnum), f"{name} unexpectedly became IntEnum"
+        assert all(isinstance(m.value, str) for m in cls), f"{name} values are no longer str"

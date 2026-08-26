@@ -14,7 +14,7 @@ jobs:
 
       # mise installs uv AND Python 3.14 (from mise.toml); uv uses that Python
       # (tool.uv.python-preference = "only-system") for the project virtualenv.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       # Guard against lockfile drift: fail if uv.lock is out of sync with
       # pyproject.toml so --frozen runs below are reproducible.
@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
 
       - name: ruff check
         run: uv run --frozen --extra dev ruff check spcedp/ tests/ examples/

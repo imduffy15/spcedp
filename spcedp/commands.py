@@ -26,6 +26,10 @@ XML_ZONE_STATUS = "zone_status"
 XML_DOOR_STATUS = "door_status"
 XML_VERIFICATION_STATUS = "verification_status"
 XML_OUTPUT_STATUS = "output_status"
+XML_SYSTEM_LOG = "system_log"
+XML_ACCESS_LOG = "access_log"
+XML_ZONE_LOG = "zone_log"
+XML_WIRELESS_LOG = "wireless_log"
 
 
 # ---------------------------------------------------------------------------

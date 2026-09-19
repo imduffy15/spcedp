@@ -105,7 +105,14 @@ class SiaEvent:
 
         Raises ``ValueError`` for genuinely non-matching payloads.
         """
-        text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else payload
+        if isinstance(payload, bytes):
+            # SPC firmware uses byte 0xA6 as a field separator inside the
+            # human-readable description. It is Latin-1 "¦", not valid UTF-8;
+            # normalise that one protocol byte before decoding the otherwise
+            # ASCII/UTF-8 envelope so callers never receive U+FFFD glyphs.
+            text = payload.replace(b"\xa6", "¦".encode()).decode("utf-8", "replace")
+        else:
+            text = payload
         m = _ENVELOPE.match(text.strip())
         if not m:
             raise ValueError(f"not an SIA event payload: {text!r}")

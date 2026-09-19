@@ -20,7 +20,7 @@ from datetime import datetime
 import pytest
 
 from spcedp.events import SiaEvent
-from spcedp.panel import Area, ArmMode, Output, Panel, Zone
+from spcedp.panel import Area, ArmMode, Output, Panel, Zone, ZoneInput, ZoneType
 
 # This module mixes synchronous accessor tests with async refresh/apply_event
 # tests, so the asyncio mark is applied per-test rather than module-wide (under
@@ -165,6 +165,28 @@ def test_zone_is_open_typed_accessor() -> None:
     assert _zone("7").is_open is None
 
 
+def test_zone_input_is_authoritative_over_stale_status() -> None:
+    """SPC4300 exposes physical state in INPUT even when STATUS is stale."""
+    zone = _zone("0")
+    zone.input = ZoneInput.OPEN.value
+    assert zone.is_open is True
+    assert zone.input_state is ZoneInput.OPEN
+    assert zone.zone_type is ZoneType.ENTRY_EXIT
+
+
+def test_zone_with_malformed_area_is_still_available() -> None:
+    zone = Zone.from_row(
+        {
+            "ID": "5",
+            "TYPE": "1",
+            "ZONE_NAME": "Front Door",
+            "AREA": "not-a-number",
+        }
+    )
+    assert zone is not None
+    assert zone.area_id == 0
+
+
 # --------------------------------------------------------------------------- H4: Output.is_active
 def test_output_is_active_typed_accessor() -> None:
     assert Output(id=1, name="Siren", state="1").is_active is True
@@ -184,6 +206,7 @@ async def test_apply_event_zone_open_close() -> None:
 
     panel.apply_event(_ev("ZO", "5"))
     assert panel.zones[5].status == "1"
+    assert panel.zones[5].input == "1"
     assert panel.zones[5].is_open is True
 
     panel.apply_event(_ev("ZC", "5"))
@@ -232,6 +255,31 @@ async def test_apply_event_area_arm_disarm() -> None:
     panel.apply_event(_ev("OP", "1"))
     assert panel.areas[1].mode == ArmMode.UNSET.value
     assert panel.areas[1].is_armed is False
+
+
+@pytest.mark.asyncio
+async def test_alarm_event_tracks_area_trigger_and_refresh_preserves_it() -> None:
+    """Event-derived triggered state survives a normal reconciliation pass."""
+    sess = FakeSession(
+        {
+            "area_status": {"AREA_STATUS": [{"ID": "1", "NAME": "Home", "MODE": "3"}]},
+            "zone_status": _zone_rows(5),
+        }
+    )
+    panel = Panel(sess)
+    await panel.refresh_areas()
+    await panel.refresh_zones()
+
+    update = panel.apply_event(_ev("BA", "5"))
+    assert update.zone_ids == frozenset({5})
+    assert update.area_ids == frozenset({1})
+    assert panel.areas[1].triggered is True
+
+    await panel.refresh_areas()
+    assert panel.areas[1].triggered is True
+
+    panel.apply_event(_ev("OP", "1"))
+    assert panel.areas[1].triggered is False
 
 
 @pytest.mark.asyncio

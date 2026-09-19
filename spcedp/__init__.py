@@ -11,13 +11,17 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .client import PanelServer, Session
 from .commands import (
+    XML_ACCESS_LOG,
     XML_AREA_STATUS,
     XML_DOOR_STATUS,
     XML_ENET_STATUS,
     XML_INFO,
     XML_OUTPUT_STATUS,
     XML_STATUS,
+    XML_SYSTEM_LOG,
     XML_VERIFICATION_STATUS,
+    XML_WIRELESS_LOG,
+    XML_ZONE_LOG,
     XML_ZONE_STATUS,
     BinaryCommand,
     BinaryOp,
@@ -33,7 +37,18 @@ from .errors import (
     reply_message,
 )
 from .events import SiaEvent
-from .panel import Area, ArmMode, Door, Output, Panel, PanelInfo, Zone
+from .panel import (
+    Area,
+    ArmMode,
+    Door,
+    EventStateUpdate,
+    Output,
+    Panel,
+    PanelInfo,
+    Zone,
+    ZoneInput,
+    ZoneType,
+)
 from .wire import EncryptionRequired, Frame, FrameDecodeError, FrameDecoder, MajorCode, MinorCode
 from .xmlcmd import AttrValue, Row, XmlReply
 
@@ -50,6 +65,9 @@ __all__ = [
     "Session",
     "Area",
     "ArmMode",
+    "ZoneInput",
+    "ZoneType",
+    "EventStateUpdate",
     "Zone",
     "Output",
     "Door",
@@ -82,6 +100,10 @@ __all__ = [
     "XML_DOOR_STATUS",
     "XML_VERIFICATION_STATUS",
     "XML_OUTPUT_STATUS",
+    "XML_SYSTEM_LOG",
+    "XML_ACCESS_LOG",
+    "XML_ZONE_LOG",
+    "XML_WIRELESS_LOG",
     # Public type aliases (XML command layer)
     "XmlReply",
     "Row",

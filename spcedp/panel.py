@@ -23,13 +23,17 @@ from datetime import UTC, datetime
 
 from .client import Session
 from .commands import (
+    XML_ACCESS_LOG,
     XML_AREA_STATUS,
     XML_DOOR_STATUS,
     XML_ENET_STATUS,
     XML_INFO,
     XML_OUTPUT_STATUS,
     XML_STATUS,
+    XML_SYSTEM_LOG,
     XML_VERIFICATION_STATUS,
+    XML_WIRELESS_LOG,
+    XML_ZONE_LOG,
     XML_ZONE_STATUS,
     BinaryOp,
     PanelOp,
@@ -52,6 +56,73 @@ class ArmMode(enum.Enum):
     PART_A = "1"
     PART_B = "2"
     FULL = "3"
+
+
+class ZoneInput(enum.StrEnum):
+    """Physical input tokens reported by ``ZONE_STATUS``.
+
+    ``OPEN`` and ``CLOSED`` describe a circuit directly. The other values
+    are panel fault/supervision states rather than a reliable open/closed
+    indication, so :attr:`Zone.is_open` deliberately returns ``None`` for
+    them unless ``STATUS`` supplies a known fallback.
+    """
+
+    CLOSED = "0"
+    OPEN = "1"
+    SHORT = "2"
+    DISCONNECTED = "3"
+    PIR_MASKED = "4"
+    DC_SUBSTITUTION = "5"
+    SENSOR_MISSING = "6"
+    OFFLINE = "7"
+
+
+class ZoneType(enum.StrEnum):
+    """Zone ``TYPE`` tokens documented by the SPC Web Gateway."""
+
+    ALARM = "0"
+    ENTRY_EXIT = "1"
+    EXIT_TERMINATOR = "2"
+    FIRE = "3"
+    FIRE_EXIT = "4"
+    LINE = "5"
+    PANIC = "6"
+    HOLD_UP = "7"
+    TAMPER = "8"
+    TECHNICAL = "9"
+    MEDICAL = "10"
+    KEY_ARM = "11"
+    UNUSED = "12"
+    SHUNT = "13"
+    X_SHUNT = "14"
+    FAULT = "15"
+    LOCK_SUPERVISION = "16"
+    SEISMIC = "17"
+    ALL_OKAY = "18"
+    HOLD_UP_FAULT = "19"
+    WARNING_FAULT = "20"
+    SETTING_AUTHORISATION = "21"
+    LOCK_ELEMENT = "22"
+    GLASSBREAK = "23"
+    WATER = "24"
+    HEAT = "25"
+    FRIDGE_FREEZER = "26"
+    GAS = "27"
+    SPRINKLER = "28"
+    CO = "29"
+    ENTRY_EXIT_2 = "30"
+
+
+@dataclass(frozen=True, slots=True)
+class EventStateUpdate:
+    """Snapshot objects changed by :meth:`Panel.apply_event`.
+
+    This is intentionally small and framework-neutral. Consumers can update
+    only the entities that changed without duplicating protocol SIA routing.
+    """
+
+    zone_ids: frozenset[int] = frozenset()
+    area_ids: frozenset[int] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +185,7 @@ class Area:
     last_unset_user_name: str = ""
     last_alarm: str = ""
     not_ready_set: str = ""
+    triggered: bool = False
 
     @property
     def arm_mode(self) -> ArmMode | None:
@@ -180,26 +252,56 @@ class Zone:
 
     @property
     def is_open(self) -> bool | None:
-        """Typed view of the raw ``status`` token: ``True`` for "1" (open),
-        ``False`` for "0" (closed), ``None`` for any other value.  An
-        unrecognised token is never silently reported as closed; the raw
-        ``status`` string remains the diagnostic source of truth."""
+        """Return the physical open/closed state when the panel exposes it.
+
+        SPC4300 firmware reports the physical circuit in ``INPUT`` while
+        leaving ``STATUS`` at ``0`` in some normal open states. Prefer known
+        input values and retain status as a compatibility fallback.
+        """
+        if self.input == ZoneInput.OPEN:
+            return True
+        if self.input == ZoneInput.CLOSED:
+            return False
         if self.status == "1":
             return True
         if self.status == "0":
             return False
         return None
 
+    @property
+    def input_state(self) -> ZoneInput | None:
+        """Typed physical input, or ``None`` for an unknown firmware token."""
+        try:
+            return ZoneInput(self.input)
+        except ValueError:
+            return None
+
+    @property
+    def zone_type(self) -> ZoneType | None:
+        """Typed zone type, or ``None`` for an unknown firmware token."""
+        try:
+            return ZoneType(self.type)
+        except ValueError:
+            return None
+
     @classmethod
     def from_row(cls, row: Row) -> Zone | None:
         zone_id = _parse_id(row, "zone")
         if zone_id is None:
             return None
+        # An incomplete/reprogrammed panel can briefly report an empty or
+        # malformed AREA field.  Keep the zone available instead of allowing
+        # one bad row to abort the whole snapshot refresh.
+        try:
+            area_id = int(row.get("AREA", "0") or 0)
+        except (TypeError, ValueError):
+            log.warning("Ignoring malformed AREA value for zone %d: %r", zone_id, row.get("AREA"))
+            area_id = 0
         return cls(
             id=zone_id,
             type=row.get("TYPE", ""),
             name=row.get("ZONE_NAME", ""),
-            area_id=int(row.get("AREA", "0") or 0),
+            area_id=area_id,
             area_name=row.get("AREA_NAME", ""),
             input=row.get("INPUT", ""),
             logic_input=row.get("LOGIC_INPUT", ""),
@@ -253,6 +355,15 @@ class Door:
     id: int
     name: str
     state: str
+
+    @property
+    def is_locked(self) -> bool | None:
+        """Typed door state where ``1``=locked and ``0``=unlocked."""
+        if self.state == "1":
+            return True
+        if self.state == "0":
+            return False
+        return None
 
     @classmethod
     def from_row(cls, row: Row) -> Door | None:
@@ -341,6 +452,15 @@ class Panel:
         for row in reply.get("AREA_STATUS", []):
             area = Area.from_row(row)
             if area is not None:
+                # ``triggered`` is event-derived state, not an AREA_STATUS
+                # field. Preserve it across reconciliation unless the panel
+                # authoritatively reports the area unset.
+                previous = self.areas.get(area.id)
+                area.triggered = (
+                    previous.triggered
+                    if previous is not None and area.arm_mode is not ArmMode.UNSET
+                    else False
+                )
                 areas[area.id] = area
         self.areas = areas
 
@@ -392,11 +512,19 @@ class Panel:
 
     async def system_log(self, max_events: int) -> XmlReply:
         """Return the parsed system event log, capped at `max_events` rows."""
-        return await self._session.xml_command("system_log", MAX_EVENTS=max_events)
+        return await self._session.xml_command(XML_SYSTEM_LOG, MAX_EVENTS=max_events)
+
+    async def access_log(self, max_events: int) -> XmlReply:
+        """Return the parsed access event log, capped at ``max_events`` rows."""
+        return await self._session.xml_command(XML_ACCESS_LOG, MAX_EVENTS=max_events)
 
     async def zone_log(self, zone_id: int) -> XmlReply:
         """Return the parsed event log for a single zone."""
-        return await self._session.xml_command("zone_log", ZONE=zone_id)
+        return await self._session.xml_command(XML_ZONE_LOG, ZONE=zone_id)
+
+    async def wireless_log(self, sensor_id: int) -> XmlReply:
+        """Return the parsed event log for one wireless sensor."""
+        return await self._session.xml_command(XML_WIRELESS_LOG, SENSOR=sensor_id)
 
     def _apply_info(self, reply: XmlReply) -> None:
         rows = reply.get("INFO", [])
@@ -439,7 +567,7 @@ class Panel:
         """Stream SIA events as they arrive (delegates to the Session feed)."""
         return self._session.events()
 
-    def apply_event(self, ev: SiaEvent) -> None:
+    def apply_event(self, ev: SiaEvent) -> EventStateUpdate:
         """Best-effort in-place reconciliation of the snapshot from a SIA event.
 
         This is a CONVENIENCE, not a source of truth.  It mutates the raw
@@ -453,14 +581,14 @@ class Panel:
         The authoritative resync is always a `refresh*` call: codes are not
         exhaustively mapped, the panel may have changed in ways no single
         event reflects, and unrecognised firmware tokens are left untouched.
-        Alarm codes flip the offending zone to open but never derive an
-        area's arm mode, which the alarm event does not carry.
+        The returned update names the mutated snapshot objects. An empty
+        update means the event was deliberately ignored.
         """
         code = ev.sia_code.upper()
         addr = ev.address.strip()
         if not addr.isdigit():
             log.debug("apply_event: non-numeric address %r for %s; ignoring", ev.address, code)
-            return
+            return EventStateUpdate()
         target = int(addr)
 
         # Zone open/close (and alarm-implies-open).  ZC is the only close code;
@@ -474,9 +602,19 @@ class Panel:
             zone = self.zones.get(target)
             if zone is None:
                 log.debug("apply_event: %s for unknown zone %d; ignoring", code, target)
-                return
+                return EventStateUpdate()
             zone.status = "1" if zone_open else "0"
-            return
+            zone.input = "1" if zone_open else "0"
+            zone.logic_input = zone.input
+            zone.proc_state = zone.input
+            if ev.category == "alarm":
+                area = self.areas.get(zone.area_id)
+                if area is not None:
+                    area.triggered = True
+                    return EventStateUpdate(
+                        zone_ids=frozenset({zone.id}), area_ids=frozenset({area.id})
+                    )
+            return EventStateUpdate(zone_ids=frozenset({zone.id}))
 
         # Area arm/disarm.  OP=opening/disarm -> UNSET; CL=closing/arm.  The SIA
         # close event does not distinguish part-set from full-set, so a generic
@@ -485,18 +623,20 @@ class Panel:
             area = self.areas.get(target)
             if area is None:
                 log.debug("apply_event: OP for unknown area %d; ignoring", target)
-                return
+                return EventStateUpdate()
             area.mode = ArmMode.UNSET.value
-            return
+            area.triggered = False
+            return EventStateUpdate(area_ids=frozenset({area.id}))
         if code == "CL":
             area = self.areas.get(target)
             if area is None:
                 log.debug("apply_event: CL for unknown area %d; ignoring", target)
-                return
+                return EventStateUpdate()
             area.mode = ArmMode.FULL.value
-            return
+            return EventStateUpdate(area_ids=frozenset({area.id}))
 
         log.debug("apply_event: no mapping for SIA code %r; ignoring", code)
+        return EventStateUpdate()
 
 
 # ---------------------------------------------------------------------------

@@ -52,6 +52,7 @@ GOLDEN_ALL = [
     "BinaryOp",
     "Door",
     "EncryptionRequired",
+    "EventStateUpdate",
     "Frame",
     "FrameDecodeError",
     "FrameDecoder",
@@ -71,16 +72,22 @@ GOLDEN_ALL = [
     "SpcError",
     "SpcProtocolError",
     "SpcTimeout",
+    "XML_ACCESS_LOG",
     "XML_AREA_STATUS",
     "XML_DOOR_STATUS",
     "XML_ENET_STATUS",
     "XML_INFO",
     "XML_OUTPUT_STATUS",
     "XML_STATUS",
+    "XML_SYSTEM_LOG",
     "XML_VERIFICATION_STATUS",
+    "XML_WIRELESS_LOG",
+    "XML_ZONE_LOG",
     "XML_ZONE_STATUS",
     "XmlReply",
     "Zone",
+    "ZoneInput",
+    "ZoneType",
     "reply_message",
 ]
 
@@ -109,12 +116,16 @@ GOLDEN_SIGNATURES = {
         "(id: 'int', name: 'str' = '', mode: 'str' = '0', "
         "last_set_time: 'str' = '', last_unset_time: 'str' = '', "
         "last_unset_user_id: 'str' = '', last_unset_user_name: 'str' = '', "
-        "last_alarm: 'str' = '', not_ready_set: 'str' = '') -> None"
+        "last_alarm: 'str' = '', not_ready_set: 'str' = '', triggered: 'bool' = False) -> None"
     ),
     "ArmMode": "(*values)",
     "BinaryCommand": "(op: 'BinaryOp | int', target_id: 'int' = 0, param: 'int' = 0) -> None",
     "BinaryOp": "(*values)",
     "Door": "(id: 'int', name: 'str', state: 'str') -> None",
+    "EventStateUpdate": (
+        "(zone_ids: 'frozenset[int]' = frozenset(), area_ids: 'frozenset[int]' = frozenset()) "
+        "-> None"
+    ),
     "Frame": (
         "(src_id: 'int', dst_id: 'int', sequence: 'int', major: 'int', "
         "minor: 'int', payload: 'bytes' = b'', checksum: 'int' = 0, "
@@ -162,6 +173,8 @@ GOLDEN_SIGNATURES = {
         "input: 'str', logic_input: 'str', status: 'str', proc_state: 'str', "
         "inhibit_allowed: 'bool', isolate_allowed: 'bool') -> None"
     ),
+    "ZoneInput": "(*values)",
+    "ZoneType": "(*values)",
     "reply_message": "(code: 'int') -> 'str'",
 }
 
@@ -186,13 +199,17 @@ GOLDEN_VALUE_EXPORTS = frozenset(
         "Row",
         "XmlReply",
         "XML_AREA_STATUS",
+        "XML_ACCESS_LOG",
         "XML_DOOR_STATUS",
         "XML_ENET_STATUS",
         "XML_INFO",
         "XML_OUTPUT_STATUS",
         "XML_STATUS",
+        "XML_SYSTEM_LOG",
         "XML_VERIFICATION_STATUS",
+        "XML_WIRELESS_LOG",
         "XML_ZONE_STATUS",
+        "XML_ZONE_LOG",
     }
 )
 
@@ -233,13 +250,17 @@ GOLDEN_VALUE_REPRS = {
     "Row": "dict[str, str]",
     "XmlReply": "dict[str, list[dict[str, str]]]",
     "XML_AREA_STATUS": "'area_status'",
+    "XML_ACCESS_LOG": "'access_log'",
     "XML_DOOR_STATUS": "'door_status'",
     "XML_ENET_STATUS": "'enet_status'",
     "XML_INFO": "'info'",
     "XML_OUTPUT_STATUS": "'output_status'",
     "XML_STATUS": "'status'",
+    "XML_SYSTEM_LOG": "'system_log'",
     "XML_VERIFICATION_STATUS": "'verification_status'",
+    "XML_WIRELESS_LOG": "'wireless_log'",
     "XML_ZONE_STATUS": "'zone_status'",
+    "XML_ZONE_LOG": "'zone_log'",
 }
 
 
@@ -264,6 +285,10 @@ def test_xml_command_id_values_are_frozen() -> None:
     assert spcedp.XML_DOOR_STATUS == "door_status"
     assert spcedp.XML_VERIFICATION_STATUS == "verification_status"
     assert spcedp.XML_OUTPUT_STATUS == "output_status"
+    assert spcedp.XML_SYSTEM_LOG == "system_log"
+    assert spcedp.XML_ACCESS_LOG == "access_log"
+    assert spcedp.XML_ZONE_LOG == "zone_log"
+    assert spcedp.XML_WIRELESS_LOG == "wireless_log"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +308,7 @@ GOLDEN_DATACLASS_FIELDS = {
         "last_unset_user_name",
         "last_alarm",
         "not_ready_set",
+        "triggered",
     ],
     "Zone": [
         "id",
@@ -299,6 +325,7 @@ GOLDEN_DATACLASS_FIELDS = {
     ],
     "Output": ["id", "name", "state"],
     "Door": ["id", "name", "state"],
+    "EventStateUpdate": ["zone_ids", "area_ids"],
 }
 
 
@@ -394,6 +421,49 @@ GOLDEN_ENUM_MEMBERS = {
         "PART_B": "2",
         "FULL": "3",
     },
+    "ZoneInput": {
+        "CLOSED": "0",
+        "OPEN": "1",
+        "SHORT": "2",
+        "DISCONNECTED": "3",
+        "PIR_MASKED": "4",
+        "DC_SUBSTITUTION": "5",
+        "SENSOR_MISSING": "6",
+        "OFFLINE": "7",
+    },
+    "ZoneType": {
+        "ALARM": "0",
+        "ENTRY_EXIT": "1",
+        "EXIT_TERMINATOR": "2",
+        "FIRE": "3",
+        "FIRE_EXIT": "4",
+        "LINE": "5",
+        "PANIC": "6",
+        "HOLD_UP": "7",
+        "TAMPER": "8",
+        "TECHNICAL": "9",
+        "MEDICAL": "10",
+        "KEY_ARM": "11",
+        "UNUSED": "12",
+        "SHUNT": "13",
+        "X_SHUNT": "14",
+        "FAULT": "15",
+        "LOCK_SUPERVISION": "16",
+        "SEISMIC": "17",
+        "ALL_OKAY": "18",
+        "HOLD_UP_FAULT": "19",
+        "WARNING_FAULT": "20",
+        "SETTING_AUTHORISATION": "21",
+        "LOCK_ELEMENT": "22",
+        "GLASSBREAK": "23",
+        "WATER": "24",
+        "HEAT": "25",
+        "FRIDGE_FREEZER": "26",
+        "GAS": "27",
+        "SPRINKLER": "28",
+        "CO": "29",
+        "ENTRY_EXIT_2": "30",
+    },
 }
 
 
@@ -422,3 +492,5 @@ def test_intenum_and_strenum_kinds_are_frozen() -> None:
     assert issubclass(spcedp.ArmMode, enum.Enum)
     assert not issubclass(spcedp.ArmMode, enum.IntEnum)
     assert all(isinstance(m.value, str) for m in spcedp.ArmMode)
+    for name in ("ZoneInput", "ZoneType"):
+        assert issubclass(getattr(spcedp, name), enum.StrEnum)

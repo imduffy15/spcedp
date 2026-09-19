@@ -15,13 +15,14 @@ async def on_session(session):
     panel = await Panel.from_session(session)
     print(panel.info)                  # PanelInfo(type='SPC4000', ...)
     for z in panel.zones.values():
-        print(z.id, z.name, z.status)
+        print(z.id, z.name, z.is_open, z.zone_type)
 
     await panel.zone(1).inhibit()
     await panel.zone(1).deinhibit()
 
     async for ev in panel.events():
-        print(ev.timestamp, ev.sia_code, ev.description)
+        update = panel.apply_event(ev)
+        print(ev.timestamp, ev.sia_code, ev.description, update.zone_ids)
 
 async def main():
     async with PanelServer(receiver_id=1001, port=50000,
@@ -125,6 +126,14 @@ variable-length payload. Two command families ride on it:
   inhibit/isolate, output set/reset, and so on.
 
 The panel pushes SIA events on `major=2` as a plain ASCII payload.
+
+`Panel.apply_event()` applies the safe, unambiguous SIA state transitions to
+the in-memory snapshot and returns an `EventStateUpdate` naming the changed
+areas and zones. This is suitable for adapters which need prompt per-object
+updates; periodic `refresh*()` calls remain the authoritative reconciliation
+path. `Zone.is_open` prefers the panel's physical `INPUT` value over the
+occasionally stale `STATUS` value, and `ZoneType`/`ZoneInput` expose the
+protocol tokens as typed enums.
 
 The byte-level layout, the major/minor codes, the binary opcode table, the
 fragment markers, the SIA event format, the checksum, and the AES layout

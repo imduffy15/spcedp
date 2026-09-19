@@ -47,6 +47,12 @@ def test_parse_accepts_bytes_and_str_equivalently() -> None:
     assert SiaEvent.parse(payload.encode()).timestamp == SiaEvent.parse(payload).timestamp
 
 
+def test_parse_normalises_spc_description_separator() -> None:
+    """SPC's Latin-1 separator is rendered without a replacement glyph."""
+    event = SiaEvent.parse(b"E2[#1000|08521203062026|ZO|1|BackDoor\xa6ZONE\xa61\xa6Home||0]")
+    assert event.description == "BackDoor¦ZONE¦1¦Home"
+
+
 def test_parse_out_of_range_timestamp_keeps_event() -> None:
     # Month 13 (HHMMSSDDMMYYYY): a panel clock glitch must not discard the
     # alarm - the event surfaces with timestamp=None.

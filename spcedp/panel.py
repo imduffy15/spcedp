@@ -125,6 +125,13 @@ class EventStateUpdate:
     area_ids: frozenset[int] = frozenset()
 
 
+# SPC firmware does not expose a reliable, universal arm-mode mapping in the
+# SIA event itself.  In particular, NL is used for part-set transitions and
+# some releases put the *user* rather than the area in OP/CL's address field.
+# These codes therefore require an immediate authoritative AREA_STATUS read.
+AREA_STATUS_SIA_CODES = frozenset({"BV", "CG", "CL", "NL", "OG", "OP"})
+
+
 # ---------------------------------------------------------------------------
 # Plain dataclasses for snapshot state
 # ---------------------------------------------------------------------------
@@ -294,7 +301,7 @@ class Zone:
         # one bad row to abort the whole snapshot refresh.
         try:
             area_id = int(row.get("AREA", "0") or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             log.warning("Ignoring malformed AREA value for zone %d: %r", zone_id, row.get("AREA"))
             area_id = 0
         return cls(
@@ -637,6 +644,39 @@ class Panel:
 
         log.debug("apply_event: no mapping for SIA code %r; ignoring", code)
         return EventStateUpdate()
+
+    async def reconcile_event(self, ev: SiaEvent) -> EventStateUpdate:
+        """Reconcile a pushed SIA event against the authoritative panel state.
+
+        Zone open/close events can be applied directly and are returned without
+        network I/O. Area-mode events are less self-contained: firmware varies
+        in both the codes it emits and whether the address identifies an area
+        or the user who performed the operation. For those events, immediately
+        read ``AREA_STATUS`` and report every refreshed area as changed.
+
+        This preserves the low-latency push behaviour of EDP while keeping the
+        panel, rather than an incomplete SIA-code table, as the source of truth.
+        """
+        update = self.apply_event(ev)
+        code = ev.sia_code.upper()
+        if code not in AREA_STATUS_SIA_CODES:
+            return update
+
+        await self.refresh_areas()
+        area_ids = set(self.areas)
+
+        # AREA_STATUS has no verified-alarm field. Match the gateway protocol's
+        # BV semantics after the refresh so consumers can expose the alarm.
+        if code == "BV":
+            addr = ev.address.strip()
+            if addr.isdigit() and (area := self.areas.get(int(addr))) is not None:
+                area.triggered = True
+                area_ids.add(area.id)
+
+        return EventStateUpdate(
+            zone_ids=update.zone_ids,
+            area_ids=frozenset(area_ids),
+        )
 
 
 # ---------------------------------------------------------------------------

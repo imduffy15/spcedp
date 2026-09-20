@@ -328,3 +328,59 @@ async def test_apply_event_code_is_case_insensitive() -> None:
     await panel.refresh_zones()
     panel.apply_event(_ev("zo", "5"))
     assert panel.zones[5].status == "1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["CG", "NL", "OG", "BV"])
+async def test_reconcile_event_refreshes_area_status_codes(code: str) -> None:
+    """Area events trigger an authoritative refresh instead of code guessing."""
+    sess = FakeSession({"area_status": {"AREA_STATUS": [{"ID": "1", "NAME": "Home", "MODE": "0"}]}})
+    panel = Panel(sess)
+    await panel.refresh_areas()
+    sess.replies["area_status"] = {"AREA_STATUS": [{"ID": "1", "NAME": "Home", "MODE": "2"}]}
+
+    update = await panel.reconcile_event(_ev(code, "1"))
+
+    assert panel.areas[1].arm_mode is ArmMode.PART_B
+    assert update.area_ids == frozenset({1})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["CL", "OP"])
+async def test_reconcile_event_refreshes_all_areas_when_address_is_user(code: str) -> None:
+    """OP/CL addresses can identify a user, so refresh every area."""
+    sess = FakeSession(
+        {
+            "area_status": {
+                "AREA_STATUS": [
+                    {"ID": "1", "NAME": "Home", "MODE": "0"},
+                    {"ID": "2", "NAME": "Garage", "MODE": "0"},
+                ]
+            }
+        }
+    )
+    panel = Panel(sess)
+    await panel.refresh_areas()
+    sess.replies["area_status"] = {
+        "AREA_STATUS": [
+            {"ID": "1", "NAME": "Home", "MODE": "3"},
+            {"ID": "2", "NAME": "Garage", "MODE": "1"},
+        ]
+    }
+
+    update = await panel.reconcile_event(_ev(code, "9998"))
+
+    assert panel.areas[1].arm_mode is ArmMode.FULL
+    assert panel.areas[2].arm_mode is ArmMode.PART_A
+    assert update.area_ids == frozenset({1, 2})
+
+
+@pytest.mark.asyncio
+async def test_reconcile_verified_alarm_marks_target_area_triggered() -> None:
+    sess = FakeSession({"area_status": {"AREA_STATUS": [{"ID": "1", "NAME": "Home", "MODE": "3"}]}})
+    panel = Panel(sess)
+    await panel.refresh_areas()
+
+    await panel.reconcile_event(_ev("BV", "1"))
+
+    assert panel.areas[1].triggered is True

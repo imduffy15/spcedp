@@ -14,6 +14,7 @@ uv add git+https://github.com/imduffy15/spcedp.git
 import asyncio
 from spcedp import Panel, PanelServer
 
+
 async def connected(session):
     panel = await Panel.from_session(session)
     print(panel.info.type, panel.info.version)
@@ -35,10 +36,11 @@ async def connected(session):
         refresh_task.cancel()
         await asyncio.gather(refresh_task, return_exceptions=True)
 
+
 async def main():
-    async with PanelServer(receiver_id=1001, port=50000,
-                           on_session=connected) as server:
+    async with PanelServer(receiver_id=1001, port=50000, on_session=connected) as server:
         await server.serve_forever()
+
 
 asyncio.run(main())
 ```
@@ -67,11 +69,11 @@ refresh confirms disarm; it cannot reconstruct alarms missed while disconnected.
 Use an area ID from `panel.areas`:
 
 ```python
-await panel.area(1).set()    # full set / away
+await panel.area(1).set()  # full set / away
 await panel.area(1).set_a()  # part set A / home
 await panel.area(1).set_b()  # part set B / night
 await panel.area(1).unset()  # disarm
-await panel.refresh_areas() # read the confirmed state
+await panel.refresh_areas()  # read the confirmed state
 ```
 
 Commands wait for the panel's reply. `PanelRejected` contains its rejection
@@ -89,12 +91,20 @@ commands and [protocol notes](PROTOCOL.md) remain for protocol work.
 
 ```sh
 mise install
-uv run --extra test pytest -q
-uv run --extra dev ruff check spcedp tests examples
-uv run --extra dev ruff format --check spcedp tests examples
-uv run --extra dev pylint spcedp
-uv run --extra dev mypy
+mise run setup       # Locked dependencies and prek Git hooks
+mise run format      # Apply Ruff formatting
+mise run ci          # All checks, tests and release packaging
 ```
+
+`mise run check` runs Ruff lint/format, strict mypy, Pylint, Bandit,
+workflow checks and file hygiene. `mise run test` runs the tests separately.
+Tool versions and dependencies are pinned in `mise.lock` and `uv.lock`.
+GitHub Actions call these same tasks and cache tools, dependencies and check results.
+Tag builds bypass caches before publishing their validated artifacts.
+
+To release, update the version in `pyproject.toml` and push a matching `vX.Y.Z`
+tag. CI publishes a wheel and source archive to GitHub Releases; it does not
+publish to PyPI. `mise run build release-check` checks the artifacts locally.
 
 Tests include captured frames, malformed input, reconnect/shutdown behavior,
 and encrypted loopback sessions. `examples/listen.py` prints live sensor and

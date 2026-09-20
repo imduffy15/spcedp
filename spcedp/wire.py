@@ -300,7 +300,7 @@ def _encrypt_payload(struct_bytes: bytes, key: bytes) -> bytes:
     tail = struct_bytes[15:]
     pad_len = (-len(tail)) % AES_BLOCK_SIZE
     tail_padded = tail + b"\x00" * pad_len
-    cipher = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    cipher = Cipher(algorithms.AES(key), modes.ECB()).encryptor()  # nosec B305 # EDP wire format.
     ct = cipher.update(tail_padded) + cipher.finalize()
     return head + ct
 
@@ -321,7 +321,7 @@ def _decrypt_in_buf(buf: bytes, key: bytes) -> bytes:
         raise FrameDecodeError(
             f"encrypted tail length {len(tail)} is not a multiple of {AES_BLOCK_SIZE}"
         )
-    cipher = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
+    cipher = Cipher(algorithms.AES(key), modes.ECB()).decryptor()  # nosec B305 # EDP wire format.
     pt = cipher.update(tail) + cipher.finalize()
     # Clear the encrypt bit so the rest of the decoder sees a cleartext frame.
     out = bytearray(head + pt)

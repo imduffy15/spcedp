@@ -21,9 +21,9 @@ is shallow - one outer wrapper, one or more child rows with attributes).
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosec B405 # tree builder only; expat rejects DTDs.
 from xml.parsers import expat
-from xml.sax.saxutils import quoteattr
+from xml.sax.saxutils import quoteattr  # nosec B406 # escaping only, no SAX parsing.
 
 FRAG_FIRST = 0x01
 FRAG_CONT = 0x02

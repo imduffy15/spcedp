@@ -166,7 +166,7 @@ def edp_checksum(struct_bytes: bytes, dlen: int) -> int:
     end = dlen + 0x15
     state = 0xFFFF
     for i in range(end):
-        if i == 0x11 or i == 0x12:       # skip the checksum slot itself
+        if i == 0x11 or i == 0x12:  # skip the checksum slot itself
             continue
         carry = state & 0x8000
         state = (state << 1) & 0xFFFF

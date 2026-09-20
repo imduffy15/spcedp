@@ -1,7 +1,73 @@
-# Tooling pin (https://mise.jdx.dev). mise installs uv AND the Python toolchain;
-# uv manages the project virtualenv. Run `mise install`, then use uv as usual
-# (`uv run ...`). uv uses this Python rather than downloading its own, via
-# tool.uv.python-preference = "only-system" in pyproject.toml.
 [tools]
-uv = "latest"
-python = "3.14"
+python = "3.14.7"
+uv = "0.12.6"
+prek = "0.5.1"
+actionlint = "1.7.12"
+zizmor = "1.30.1"
+github-cli = "2.97.0"
+
+[env]
+UV_PYTHON = "3.14.7"
+
+[tasks.setup]
+description = "Install locked dependencies and Git hooks"
+depends = ["sync"]
+run = "prek install"
+
+[tasks.sync]
+description = "Install the exact development environment"
+run = "uv sync --locked"
+
+[tasks.lint]
+depends = ["sync"]
+run = "uv run --no-sync ruff check ."
+
+[tasks.format]
+depends = ["sync"]
+run = "uv run --no-sync ruff format ."
+
+[tasks.format-check]
+depends = ["sync"]
+run = "uv run --no-sync ruff format --check ."
+
+[tasks.typecheck]
+depends = ["sync"]
+run = "uv run --no-sync mypy"
+
+[tasks.pylint]
+depends = ["sync"]
+run = "uv run --no-sync pylint spcedp scripts"
+
+[tasks.security]
+depends = ["sync"]
+run = "uv run --no-sync bandit -q -c pyproject.toml -r spcedp"
+
+[tasks.workflows]
+run = ["actionlint", "zizmor --offline .github/workflows"]
+
+[tasks.check]
+description = "Run all pre-commit checks, including strict typing"
+depends = ["sync"]
+run = "prek run --all-files"
+
+[tasks.test]
+depends = ["sync"]
+run = "uv run --no-sync pytest -q --cov=spcedp --cov-report=term-missing --cov-report=xml"
+
+[tasks.build]
+depends = ["sync"]
+run = ["uv build --clear --no-build-isolation", "uv run --no-sync twine check --strict dist/*"]
+
+[tasks.release-check]
+depends = ["sync"]
+run = "uv run --no-sync python scripts/release.py check"
+
+[tasks.release]
+run = "python scripts/release.py publish"
+
+[tasks.ci]
+description = "Validate and build exactly as CI does"
+depends = ["check", "test", "build"]
+
+[tasks.cache-prune]
+run = "uv cache prune --ci"

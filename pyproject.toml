@@ -5,13 +5,12 @@ description = "Async Python SDK for Vanderbilt SPC alarm panels (direct EDP v2)"
 readme = "README.md"
 requires-python = ">=3.14"
 authors = [{ name = "Ian Duffy", email = "ian@ianduffy.ie" }]
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["vanderbilt", "spc", "alarm", "edp", "home-assistant", "asyncio"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Framework :: AsyncIO",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -23,14 +22,12 @@ dependencies = [
     "cryptography>=43",   # for AES-128-ECB (optional EDP frame encryption)
 ]
 
-[project.optional-dependencies]
-test = [
-    "pytest>=8",
-    "pytest-asyncio>=0.23",
-    "hypothesis>=6.100",
-    "pytest-cov>=5",
+[dependency-groups]
+dev = [
+    "pytest>=8", "pytest-asyncio>=1", "hypothesis>=6.100", "pytest-cov>=5",
+    "ruff>=0.15", "pylint>=4", "mypy>=2", "bandit[toml]>=1.8",
+    "setuptools>=77", "twine>=6",
 ]
-dev = ["ruff>=0.6", "pylint>=3.2", "mypy>=1.10"]
 
 [project.urls]
 Homepage = "https://github.com/imduffy15/spcedp"
@@ -39,7 +36,7 @@ Issues = "https://github.com/imduffy15/spcedp/issues"
 "Protocol notes" = "https://github.com/imduffy15/spcedp/blob/main/PROTOCOL.md"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -58,10 +55,6 @@ source = ["spcedp"]
 [tool.coverage.report]
 show_missing = true
 exclude_lines = ["pragma: no cover"]
-# Coverage is advisory for now. Once a stable baseline is measured, a
-# `fail_under = <baseline>` gate can be enabled here (and `--cov-fail-under`
-# wired into CI) and ratcheted upward as gaps close.
-
 [tool.uv]
 # Use the Python that mise provides (see mise.toml), not a uv-downloaded one.
 python-preference = "only-system"
@@ -71,8 +64,9 @@ line-length = 100
 target-version = "py314"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
-ignore = ["RUF022"]  # keep __all__ grouped by category, not alphabetical
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "DTZ", "T10", "PIE"]
+# Keep exports grouped; protocol APIs deliberately expose per-command timeouts.
+ignore = ["RUF022", "ASYNC109"]
 
 [tool.ruff.lint.per-file-ignores]
 # pytest.importorskip("cryptography") must run before importing the modules
@@ -80,7 +74,9 @@ ignore = ["RUF022"]  # keep __all__ grouped by category, not alphabetical
 "tests/test_encryption.py" = ["E402"]
 # The session test helper returns a fixed (sess, writer, server, wt) tuple;
 # individual tests use different subsets, so some slots go unused.
-"tests/*" = ["RUF059"]
+# Protocol timestamps carry no timezone; socket tests wait on observable state.
+"tests/*" = ["RUF059", "ASYNC110", "DTZ001"]
+"spcedp/events.py" = ["DTZ001"]
 
 [tool.pylint.main]
 py-version = "3.14"
@@ -109,8 +105,9 @@ disable = [
 
 [tool.mypy]
 python_version = "3.14"
-files = ["spcedp"]
-disallow_untyped_defs = true
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_return_any = true
+files = ["spcedp", "scripts"]
+strict = true
+
+[tool.bandit]
+# Internal assertions enforce programmer invariants; no input validation relies on them.
+skips = ["B101"]

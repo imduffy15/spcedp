@@ -96,7 +96,7 @@ class Session:
     _write_queue: asyncio.Queue[bytes] = field(
         default_factory=lambda: asyncio.Queue(maxsize=WRITE_QUEUE_MAXSIZE)
     )
-    _tasks: set[asyncio.Task] = field(default_factory=set)
+    _tasks: set[asyncio.Task[None]] = field(default_factory=set)
     _closed: asyncio.Event = field(default_factory=asyncio.Event)
     _poll_count: int = 0
     # True once a WRITE_QUEUE_WARN rising-edge has been logged; reset when the
@@ -428,7 +428,7 @@ class PanelServer:
         self,
         *,
         receiver_id: int,
-        bind: str = "0.0.0.0",
+        bind: str = "0.0.0.0",  # nosec B104 # panels initiate connections on the LAN.
         port: int = 50000,
         key: bytes | str | None = None,
         idle_timeout: float | None = DEFAULT_IDLE_TIMEOUT,
@@ -450,7 +450,7 @@ class PanelServer:
         self._on_event = on_event
         self._on_session = on_session
         self._server: asyncio.base_events.Server | None = None
-        self._handlers: set[asyncio.Task] = set()
+        self._handlers: set[asyncio.Task[None]] = set()
 
     @staticmethod
     def _normalise_key(key: bytes | str | None) -> bytes | None:
@@ -513,7 +513,7 @@ class PanelServer:
         # normal teardown path), it is dead and the receiver would go
         # mute-but-alive: tear the session down so the read loop stops too.
         writer_task.add_done_callback(lambda t: self._on_writer_done(t, session, peer))
-        session_task: asyncio.Task | None = None
+        session_task: asyncio.Task[None] | None = None
         handshake_started = False
         try:
             while True:
@@ -590,7 +590,7 @@ class PanelServer:
             teardown_task.cancel()
             await asyncio.gather(read_task, teardown_task, return_exceptions=True)
 
-    def _on_writer_done(self, task: asyncio.Task, session: Session, peer: object) -> None:
+    def _on_writer_done(self, task: asyncio.Task[None], session: Session, peer: object) -> None:
         """Done-callback for the writer task: tear down on unexpected exit."""
         if task.cancelled():
             return  # normal teardown cancelled it
@@ -603,7 +603,7 @@ class PanelServer:
             log.error("writer task for %s exited unexpectedly; tearing session down", peer)
         session.request_teardown()
 
-    def _on_session_done(self, task: asyncio.Task, session: Session, peer: object) -> None:
+    def _on_session_done(self, task: asyncio.Task[None], session: Session, peer: object) -> None:
         """Done-callback for on_session: log a crash immediately and tear down."""
         if task.cancelled():
             return  # normal teardown cancelled it
@@ -623,7 +623,7 @@ class PanelServer:
         session: Session,
         decoder: FrameDecoder,
         writer: asyncio.StreamWriter,
-        tasks: tuple[asyncio.Task | None, ...],
+        tasks: tuple[asyncio.Task[None] | None, ...],
         peer: object,
     ) -> None:
         log.info("connection closed: %s", peer)

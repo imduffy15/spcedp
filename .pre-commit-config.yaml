@@ -1,33 +1,49 @@
-# Static-analysis hooks. Run with `prek run --all-files` (prek is a fast,
-# drop-in pre-commit runner: https://github.com/j178/prek) or with the classic
-# `pre-commit`. Hooks invoke the project's pinned dev tools via uv, so the
-# versions match `pip install -e ".[dev]"` / the uv lockfile.
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
   - repo: local
     hooks:
-      - id: ruff-check
-        name: ruff check
-        entry: uv run --frozen --extra dev ruff check --fix
+      - id: lint
+        name: lint
+        entry: mise run lint
         language: system
-        types_or: [python, pyi]
-        require_serial: true
-      - id: ruff-format
-        name: ruff format
-        entry: uv run --frozen --extra dev ruff format
+        pass_filenames: false
+        files: '\.(py|pyi)$|^pyproject\.toml$'
+      - id: format-check
+        name: format-check
+        entry: mise run format-check
         language: system
-        types_or: [python, pyi]
-        require_serial: true
+        pass_filenames: false
+        files: '\.(py|pyi)$|^pyproject\.toml$'
+      - id: typecheck
+        name: typecheck
+        entry: mise run typecheck
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi)$|^(pyproject\.toml|uv\.lock)$'
       - id: pylint
         name: pylint
-        entry: uv run --frozen --extra dev pylint
+        entry: mise run pylint
         language: system
-        types: [python]
-        files: ^spcedp/        # lint the package; tests use looser conventions
-        require_serial: true
-      - id: mypy
-        name: mypy
-        entry: uv run --frozen --extra dev mypy
+        pass_filenames: false
+        files: '\.(py|pyi)$|^pyproject\.toml$'
+      - id: security
+        name: security
+        entry: mise run security
         language: system
-        types: [python]
-        pass_filenames: false  # mypy checks the whole package via [tool.mypy] files
-        require_serial: true
+        pass_filenames: false
+        files: '\.(py|pyi)$|^pyproject\.toml$'
+      - id: workflows
+        name: workflows
+        entry: mise run workflows
+        language: system
+        pass_filenames: false
+        files: '^\.github/workflows/'

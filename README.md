@@ -43,12 +43,12 @@ async def main():
 asyncio.run(main())
 ```
 
-In the panel's **Communications → Reporting → EDP**, set version **2**,
-**TCP/IP**, your listener's reachable IP, and matching receiver ID and port.
-Enable **Network**, **Commands**, **Always connected**, **Panel master**,
-**Primary receiver**, **Verification**, and always-available live streaming.
-Set polling to **10 seconds**. If encryption is enabled, pass the matching
-32-hex-digit key as `PanelServer(..., key=...)`.
+Follow the [panel setup instructions](https://github.com/imduffy15/hacs-spc-vanderbilt#panel-setup)
+for global EDP settings, the TCP receiver and event filters. Use this
+listener's host IP, `port` and `receiver_id` wherever the guide refers to
+Home Assistant. The example uses panel ID `1000` and receiver ID `1001`;
+`PanelServer` learns the panel ID from the connection. For encryption, pass
+the receiver's matching 32-hex-digit key as `PanelServer(..., key=...)`.
 
 `Panel.from_session()` waits for the first poll and reads identity, areas and
 zones. `zones` and `areas` are snapshots; refresh replaces their contents.

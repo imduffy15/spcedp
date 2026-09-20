@@ -1,24 +1,10 @@
-"""Panel snapshot reconciliation tests (campaign H2/M1.5/M3.1/M3.5).
-
-Drives :class:`Panel` against a fake Session (mirroring ``tests/test_panel.py``)
-to assert the post-fix behaviour:
-
-  * ``refresh*`` rebuilds the dicts wholesale, so a zone the panel stops
-    reporting disappears instead of lingering as a stale ghost (M3).
-  * the typed accessors (``ArmMode``, ``Zone.is_open``, ``Zone.input_state``)
-    map known tokens and return ``None`` for unknown ones, never a silent
-    default (H4 surface).
-  * ``Panel.apply_event`` reconciles ``zone.status`` / ``area.mode`` in place
-    for clearly-mappable SIA codes and is a deliberate no-op otherwise (H2).
-  * ``refresh()`` stamps ``last_refresh`` (M1.5/M3.1).
-"""
+"""Sensor events, alarm states and snapshot reconciliation."""
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 
+from spcedp.commands import BinaryOp
 from spcedp.events import SiaEvent
 from spcedp.panel import Area, ArmMode, Panel, Zone, ZoneInput, ZoneType
 
@@ -45,11 +31,8 @@ class FakeSession:
         return self.replies.get(command_id, {})
 
     async def binary_command(
-        self, op, target_id: int = 0, param: int = 0, timeout: float = 5.0
+        self, op: BinaryOp, target_id: int, *, timeout: float = 5.0
     ) -> None:  # pragma: no cover - not exercised here
-        return
-
-    async def panel_command(self, op, timeout: float = 5.0) -> None:  # pragma: no cover
         return
 
 
@@ -61,7 +44,7 @@ def _zone_rows(*ids: int) -> dict:
                 "ZONE_NAME": f"Z{i}",
                 "TYPE": "1",
                 "AREA": "1",
-                "STATUS": "0",
+                "INPUT": "0",
             }
             for i in ids
         ]
@@ -97,23 +80,6 @@ async def test_refresh_zones_drops_stale_ghost() -> None:
 
 
 # --------------------------------------------------------------------------- M1.5/M3.1
-@pytest.mark.asyncio
-async def test_refresh_sets_last_refresh() -> None:
-    """A full refresh stamps last_refresh; it starts None on a bare Panel."""
-    sess = FakeSession(
-        {
-            "info": {},
-            "area_status": {},
-            "zone_status": {},
-            "output_status": {},
-            "door_status": {},
-        }
-    )
-    panel = Panel(sess)
-    assert panel.last_refresh is None
-    await panel.refresh()
-    assert isinstance(panel.last_refresh, datetime)
-    assert panel.last_refresh.tzinfo is not None  # timezone-aware (UTC)
 
 
 # --------------------------------------------------------------------------- H4: ArmMode
@@ -142,19 +108,13 @@ def test_is_armed_reflects_known_tokens(token: str, is_armed: bool) -> None:
 
 
 # --------------------------------------------------------------------------- H4: Zone.is_open
-def _zone(status: str) -> Zone:
+def _zone(input_value: str) -> Zone:
     return Zone(
         id=1,
         type="1",
         name="Z1",
         area_id=1,
-        area_name="A",
-        input="",
-        logic_input="",
-        status=status,
-        proc_state="",
-        inhibit_allowed=False,
-        isolate_allowed=False,
+        input=input_value,
     )
 
 
@@ -165,8 +125,8 @@ def test_zone_is_open_typed_accessor() -> None:
     assert _zone("7").is_open is None
 
 
-def test_zone_input_is_authoritative_over_stale_status() -> None:
-    """SPC4300 exposes physical state in INPUT even when STATUS is stale."""
+def test_zone_input_and_type_are_typed() -> None:
+    """Physical state and zone type use their typed tokens."""
     zone = _zone("0")
     zone.input = ZoneInput.OPEN.value
     assert zone.is_open is True
@@ -193,16 +153,16 @@ async def test_apply_event_zone_open_close() -> None:
     sess = FakeSession({"zone_status": _zone_rows(5)})
     panel = Panel(sess)
     await panel.refresh_zones()
-    assert panel.zones[5].status == "0"
+    assert panel.zones[5].input == "0"
     assert panel.zones[5].is_open is False
 
     panel.apply_event(_ev("ZO", "5"))
-    assert panel.zones[5].status == "1"
+    assert panel.zones[5].input == "1"
     assert panel.zones[5].input == "1"
     assert panel.zones[5].is_open is True
 
     panel.apply_event(_ev("ZC", "5"))
-    assert panel.zones[5].status == "0"
+    assert panel.zones[5].input == "0"
     assert panel.zones[5].is_open is False
 
 
@@ -214,7 +174,7 @@ async def test_apply_event_alarm_implies_zone_open(alarm_code: str) -> None:
     panel = Panel(sess)
     await panel.refresh_zones()
     panel.apply_event(_ev(alarm_code, "5"))
-    assert panel.zones[5].status == "1"
+    assert panel.zones[5].input == "1"
 
 
 @pytest.mark.asyncio
@@ -225,7 +185,7 @@ async def test_apply_event_unknown_zone_is_noop() -> None:
     # Address resolves to a zone the snapshot does not know -> no-op, no raise.
     panel.apply_event(_ev("ZO", "99"))
     assert list(panel.zones) == [5]
-    assert panel.zones[5].status == "0"
+    assert panel.zones[5].input == "0"
 
 
 # --------------------------------------------------------------------------- H2: apply_event areas
@@ -294,7 +254,7 @@ async def test_apply_event_unmapped_code_is_noop() -> None:
 
     # NT (network trouble) carries no per-zone/area state to reconcile.
     panel.apply_event(_ev("NT", "0"))
-    assert panel.zones[5].status == "0"
+    assert panel.zones[5].input == "0"
     assert panel.areas[1].mode == "0"
 
 
@@ -305,7 +265,7 @@ async def test_apply_event_non_numeric_address_is_noop() -> None:
     await panel.refresh_zones()
     # A non-numeric address cannot resolve to an entity -> no-op, no raise.
     panel.apply_event(_ev("ZO", "abc"))
-    assert panel.zones[5].status == "0"
+    assert panel.zones[5].input == "0"
 
 
 @pytest.mark.asyncio
@@ -314,7 +274,7 @@ async def test_apply_event_code_is_case_insensitive() -> None:
     panel = Panel(sess)
     await panel.refresh_zones()
     panel.apply_event(_ev("zo", "5"))
-    assert panel.zones[5].status == "1"
+    assert panel.zones[5].input == "1"
 
 
 @pytest.mark.asyncio

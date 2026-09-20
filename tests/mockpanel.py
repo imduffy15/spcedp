@@ -107,8 +107,6 @@ def _reply_minor(req: Frame) -> int:
         return int(MinorCode.REPLY)
     if req.major == MajorCode.BINARY_CMD:
         return int(MinorCode.BINARY_REPLY)
-    if req.major == MajorCode.PANEL_CMD:
-        return int(MinorCode.PANEL_REPLY)
     # Fall back to a generic reply minor for unknown majors.
     return int(MinorCode.REPLY)
 
@@ -134,7 +132,7 @@ def _command_id(req: Frame) -> str | int | None:
         if end < 0:
             return None
         return text[start:end]
-    if req.major in (MajorCode.BINARY_CMD, MajorCode.PANEL_CMD):
+    if req.major == MajorCode.BINARY_CMD:
         return req.payload[0] if req.payload else None
     return None
 

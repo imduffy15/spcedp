@@ -22,8 +22,7 @@ GA behaviour from the roadmap:
   * **``wait_ready(min_polls=N)``** unblocks only after the panel has completed
     at least N polls.
 
-  * **Global binary op wire shape.** ``binary_command(BELL_SILENCE)`` encodes to
-    a single opcode byte (a global op takes no target/param).
+
 
   * **``PanelServer._normalise_key``** accepts a 32-hex string or 16 raw bytes
     and rejects empty / wrong-length / odd-hex values at construction.
@@ -42,9 +41,9 @@ import pytest
 from mockpanel import DEFAULT_NONCE, MockPanel
 
 from spcedp.client import PanelServer, Session
-from spcedp.commands import BinaryCommand, BinaryOp
+from spcedp.commands import BinaryOp
 from spcedp.errors import ReplyCode
-from spcedp.wire import FLAG_FROM_RECEIVER, Frame, MajorCode, MinorCode
+from spcedp.wire import Frame, MajorCode, MinorCode
 
 # Applied per-async-test (not module-wide) so the synchronous encode/key-
 # validation tests below are not flagged for an unused asyncio mark.
@@ -219,7 +218,7 @@ async def test_concurrent_xml_commands_demux_to_own_reply() -> None:
 async def test_concurrent_binary_commands_all_resolve() -> None:
     """A gather of concurrent binary_command calls all resolve (return None).
 
-    Each carries a distinct (target_id, param); distinct sequences mean the
+    Each carries a distinct area ID; distinct sequences mean the
     binary-reply demux (keyed on sequence) resolves each future exactly once.
     """
     n = 100
@@ -227,7 +226,7 @@ async def test_concurrent_binary_commands_all_resolve() -> None:
         sess = ctx.session
         assert sess is not None
         results = await asyncio.gather(
-            *(sess.binary_command(BinaryOp.ZONE_INHIBIT, i + 1, i & 0xFF) for i in range(n))
+            *(sess.binary_command(BinaryOp.AREA_SET_A, i + 1) for i in range(n))
         )
         assert results == [None] * n
         # All futures resolved and were popped; no pending state left behind.
@@ -254,7 +253,7 @@ async def test_random_poll_sequences_bump_next_seq() -> None:
         # A subsequent command allocates a sequence strictly greater than the
         # interleaved POLL's, so it cannot collide with the panel's space.
         before = sess.next_seq
-        await sess.binary_command(BinaryOp.ZONE_INHIBIT, 1, 0)
+        await sess.binary_command(BinaryOp.AREA_SET_A, 1)
         assert sess.next_seq > before
 
 
@@ -406,57 +405,6 @@ async def test_wait_ready_returns_immediately_when_already_polled() -> None:
 # --------------------------------------------------------------------------
 # Global binary op wire shape: BELL_SILENCE -> single opcode byte.
 # --------------------------------------------------------------------------
-
-
-def test_global_binary_op_encodes_to_one_byte() -> None:
-    """A global op (e.g. BELL_SILENCE) encodes to a 1-byte payload."""
-    assert BinaryCommand(BinaryOp.BELL_SILENCE).encode() == bytes([int(BinaryOp.BELL_SILENCE)])
-    assert BinaryCommand(BinaryOp.BELL_SILENCE).encode() == b"\x1c"
-    # A non-global op keeps the 3-byte op/target/param shape.
-    assert BinaryCommand(BinaryOp.ZONE_INHIBIT, 5, 1).encode() == b"\x03\x05\x01"
-
-
-def test_global_binary_op_rejects_target_or_param() -> None:
-    """A global op must not carry a target_id/param."""
-    with pytest.raises(ValueError, match="global command"):
-        BinaryCommand(BinaryOp.BELL_SILENCE, target_id=1).encode()
-    with pytest.raises(ValueError, match="global command"):
-        BinaryCommand(BinaryOp.BELL_SILENCE, param=2).encode()
-
-
-@asyncio_test
-async def test_global_binary_command_sends_one_byte_payload() -> None:
-    """binary_command(BELL_SILENCE) puts a single-byte payload on the wire."""
-    async with _EchoPanel() as ctx:
-        sess = ctx.session
-        panel = ctx.panel
-        assert sess is not None and panel is not None
-
-        captured: list[Frame] = []
-
-        async def capture_loop() -> None:
-            while True:
-                req = await panel._inbound.get()
-                if req.major == MajorCode.BINARY_CMD and req.minor == MinorCode.REQUEST:
-                    captured.append(req)
-                    await panel._send_reply_payload(
-                        req, int(MinorCode.BINARY_REPLY), bytes([int(ReplyCode.OK)])
-                    )
-
-        # Replace the echo reply loop with a capturing one for this test.
-        assert ctx._serve_task is not None
-        ctx._serve_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await ctx._serve_task
-        ctx._serve_task = asyncio.ensure_future(capture_loop())
-
-        await sess.binary_command(BinaryOp.BELL_SILENCE)
-        await _wait_for(lambda: bool(captured))
-        req = captured[0]
-        assert req.major == MajorCode.BINARY_CMD
-        assert req.src_flag == FLAG_FROM_RECEIVER
-        assert req.payload == bytes([int(BinaryOp.BELL_SILENCE)])
-        assert len(req.payload) == 1
 
 
 # --------------------------------------------------------------------------

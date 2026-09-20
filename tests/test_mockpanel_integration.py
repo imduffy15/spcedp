@@ -87,13 +87,13 @@ DOOR_REPLY = b"\x01<COMMAND_REPLY><DOOR_STATUS></DOOR_STATUS></COMMAND_REPLY>"
 # FRAG_CONT marker 0x02.
 ZONE_FRAG_1 = (
     b"\x01<COMMAND_REPLY><ZONE_STATUS>"
-    b'<ZONE ID="1" ZONE_NAME="Hall" TYPE="1" AREA="1" STATUS="1" '
+    b'<ZONE ID="1" ZONE_NAME="Hall" TYPE="1" AREA="1" INPUT="1" '
     b'INHIBIT_ALLOWED="1" ISOLATE_ALLOWED="0" />'
-    b'<ZONE ID="2" ZONE_NAME="Kitchen" TYPE="1" AREA="1" STATUS="0" '
+    b'<ZONE ID="2" ZONE_NAME="Kitchen" TYPE="1" AREA="1" INPUT="0" '
 )
 ZONE_FRAG_2 = (
     b'\x02INHIBIT_ALLOWED="1" ISOLATE_ALLOWED="1" />'
-    b'<ZONE ID="3" ZONE_NAME="Garage" TYPE="1" AREA="1" STATUS="0" '
+    b'<ZONE ID="3" ZONE_NAME="Garage" TYPE="1" AREA="1" INPUT="0" '
     b'INHIBIT_ALLOWED="0" ISOLATE_ALLOWED="0" />'
     b"</ZONE_STATUS></COMMAND_REPLY>"
 )
@@ -256,18 +256,15 @@ async def test_full_handshake_refresh_and_control(key: bytes | None) -> None:
     # order, with the right typed status (no stale ghosts, no lost fragment).
     assert list(panel.zones) == [1, 2, 3]
     assert panel.zones[1].name == "Hall"
-    assert panel.zones[1].is_open is True  # STATUS="1"
+    assert panel.zones[1].is_open is True  # INPUT="1"
     assert panel.zones[2].name == "Kitchen"
-    assert panel.zones[2].is_open is False  # STATUS="0"
-    assert panel.zones[2].isolate_allowed is True
+    assert panel.zones[2].is_open is False  # INPUT="0"
     assert panel.zones[3].name == "Garage"
-    assert panel.zones[3].inhibit_allowed is False
 
     # The binary control apply reached the wire as a real 3-byte binary command
     # (AREA_SET_A, target=1, param=0) and completed without raising (OK
     # reply). With a key, this also proves the request decrypted correctly.
     assert seen_bin == [bytes([int(BinaryOp.AREA_SET_A), 1, 0])]
-    assert panel.last_refresh is not None
 
 
 # ---------------------------------------------------------------------------
@@ -328,18 +325,19 @@ async def test_encrypted_hello_ack_is_on_the_wire_encrypted() -> None:
 
 async def test_encrypted_event_push_parses_and_acks() -> None:
     """An encrypted SIA EVENT push from the panel is decrypted, parsed into a
-    SiaEvent, surfaced to on_event, and ACKed (the ACK itself encrypted)."""
+    SiaEvent, surfaced to the event stream, and ACKed (the ACK itself encrypted)."""
     events: list[SiaEvent] = []
 
-    async def on_event(sess: Session, ev: SiaEvent) -> None:
-        events.append(ev)
+    async def on_session(sess: Session) -> None:
+        async for event in sess.events():
+            events.append(event)
 
     server = PanelServer(
         receiver_id=RECEIVER_ID,
         bind="127.0.0.1",
         port=0,
         key=KEY,
-        on_event=on_event,
+        on_session=on_session,
         idle_timeout=IDLE_TIMEOUT,
     )
     async with server:
@@ -351,7 +349,7 @@ async def test_encrypted_event_push_parses_and_acks() -> None:
             ev_ack = await panel.push_event(b"E2[#1000|08521203062026|BA|1|Burglar||0]")
             # The EVENT_ACK came back (decrypted by the keyed mock decoder).
             assert ev_ack.minor == MinorCode.EVENT_ACK
-            # on_event fired with the parsed event.
+            # The event stream delivered the parsed event.
             await asyncio.wait_for(_until(lambda: bool(events)), 2.0)
             assert events[0].sia_code == "BA"
             assert events[0].address == "1"

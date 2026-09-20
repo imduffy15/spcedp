@@ -11,21 +11,10 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .client import PanelServer, Session
 from .commands import (
-    XML_ACCESS_LOG,
     XML_AREA_STATUS,
-    XML_DOOR_STATUS,
-    XML_ENET_STATUS,
     XML_INFO,
-    XML_OUTPUT_STATUS,
-    XML_STATUS,
-    XML_SYSTEM_LOG,
-    XML_VERIFICATION_STATUS,
-    XML_WIRELESS_LOG,
-    XML_ZONE_LOG,
     XML_ZONE_STATUS,
-    BinaryCommand,
     BinaryOp,
-    PanelOp,
 )
 from .errors import (
     PanelRejected,
@@ -76,9 +65,7 @@ __all__ = [
     "MajorCode",
     "MinorCode",
     # Commands & status codes
-    "BinaryCommand",
     "BinaryOp",
-    "PanelOp",
     "ReplyCode",
     "reply_message",
     # Exceptions
@@ -89,17 +76,8 @@ __all__ = [
     "SpcProtocolError",
     # XML command IDs (arguments to Session.xml_command)
     "XML_INFO",
-    "XML_STATUS",
     "XML_AREA_STATUS",
-    "XML_ENET_STATUS",
     "XML_ZONE_STATUS",
-    "XML_DOOR_STATUS",
-    "XML_VERIFICATION_STATUS",
-    "XML_OUTPUT_STATUS",
-    "XML_SYSTEM_LOG",
-    "XML_ACCESS_LOG",
-    "XML_ZONE_LOG",
-    "XML_WIRELESS_LOG",
     # Public type aliases (XML command layer)
     "XmlReply",
     "Row",

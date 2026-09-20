@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 
 import pytest
 
 from spcedp.client import MAX_XML_FRAGMENTS, PanelServer, Session
-from spcedp.commands import BinaryOp, PanelOp
+from spcedp.commands import BinaryOp
 from spcedp.errors import SpcConnectionLost, SpcError, SpcProtocolError, SpcTimeout
 from spcedp.events import SiaEvent
 from spcedp.wire import FLAG_FROM_RECEIVER, Frame, MajorCode, MinorCode
@@ -179,13 +178,14 @@ async def test_xml_command_caps_runaway_fragmentation() -> None:
     await _cancel(wt)
 
 
-async def test_binary_command_ok_returns_none() -> None:
+@pytest.mark.parametrize("op", list(BinaryOp))
+async def test_binary_command_ok_returns_none(op: BinaryOp) -> None:
     sess, writer, server, wt = _make_session()
-    cmd = asyncio.create_task(sess.binary_command(BinaryOp.AREA_SET, 3, 1))
+    cmd = asyncio.create_task(sess.binary_command(op, 3))
     await _wait_for(lambda: len(writer.written) >= 1)
     req = Frame.decode(writer.written[-1])
     assert req.major == MajorCode.BINARY_CMD
-    assert req.payload == b"\x01\x03\x01"
+    assert req.payload == bytes([op, 3, 0])
     server._dispatch(
         sess,
         _reply(req.sequence, b"\xf0", major=MajorCode.BINARY_CMD, minor=MinorCode.BINARY_REPLY),
@@ -219,20 +219,6 @@ async def test_binary_command_raises_on_empty_reply() -> None:
     )
     with pytest.raises(SpcError):
         await asyncio.wait_for(cmd, 1.0)
-    await _cancel(wt)
-
-
-async def test_panel_command_routes_major5_minor1() -> None:
-    sess, writer, server, wt = _make_session()
-    cmd = asyncio.create_task(sess.panel_command(PanelOp.TEST))
-    await _wait_for(lambda: len(writer.written) >= 1)
-    req = Frame.decode(writer.written[-1])
-    assert req.major == MajorCode.PANEL_CMD
-    assert req.payload == bytes([int(PanelOp.TEST)])
-    server._dispatch(
-        sess, _reply(req.sequence, b"\xf0", major=MajorCode.PANEL_CMD, minor=MinorCode.PANEL_REPLY)
-    )
-    assert await asyncio.wait_for(cmd, 1.0) is None
     await _cancel(wt)
 
 
@@ -296,23 +282,21 @@ async def _read_frame(reader: asyncio.StreamReader) -> Frame:
 
 async def test_panelserver_handshake_and_event_end_to_end() -> None:
     """Drive the real PanelServer._handle loop over a loopback socket:
-    HELLO -> HELLO_ACK, an event -> EVENT_ACK + on_event firing, and a clean
+    HELLO -> HELLO_ACK, an event -> EVENT_ACK + event delivery, and a clean
     teardown when the peer disconnects."""
     events: list[SiaEvent] = []
     sessions: list[Session] = []
 
     async def on_session(sess: Session) -> None:
         sessions.append(sess)
-
-    async def on_event(sess: Session, ev: SiaEvent) -> None:
-        events.append(ev)
+        async for event in sess.events():
+            events.append(event)
 
     server = PanelServer(
         receiver_id=RECEIVER_ID,
         bind="127.0.0.1",
         port=0,
         on_session=on_session,
-        on_event=on_event,
         idle_timeout=5.0,
     )
     async with server:
@@ -386,12 +370,6 @@ async def test_emit_event_drops_oldest_when_full() -> None:
 
 async def test_dispatch_survives_malformed_sia_payload() -> None:
     sess, writer, server, wt = _make_session()
-    called: list[SiaEvent] = []
-
-    async def on_event(s: Session, e: SiaEvent) -> None:
-        called.append(e)
-
-    server._on_event = on_event
     garbage = Frame(
         src_id=PANEL_ID,
         dst_id=RECEIVER_ID,
@@ -407,8 +385,7 @@ async def test_dispatch_survives_malformed_sia_payload() -> None:
     ack = Frame.decode(writer.written[-1])
     assert ack.minor == MinorCode.EVENT_ACK
     assert ack.sequence == 9
-    # ... but no event is emitted and the callback is never invoked.
-    assert called == []
+    # ... but no event is emitted.
     assert sess._events.empty()
     await _cancel(wt)
 
@@ -470,63 +447,14 @@ async def test_disconnect_fails_pending_command_end_to_end() -> None:
             await asyncio.wait_for(cmd, 2.0)
 
 
-async def test_on_event_exception_is_logged_and_session_survives(caplog) -> None:
-    async def on_event(sess: Session, ev: SiaEvent) -> None:
-        raise RuntimeError("boom")
-
-    server = PanelServer(
-        receiver_id=RECEIVER_ID, bind="127.0.0.1", port=0, on_event=on_event, idle_timeout=5.0
-    )
-    async with server:
-        port = server._server.sockets[0].getsockname()[1]
-        reader, writer = await asyncio.open_connection("127.0.0.1", port)
-        hello = Frame(
-            src_id=PANEL_ID,
-            dst_id=RECEIVER_ID,
-            sequence=1,
-            major=int(MajorCode.SESSION),
-            minor=int(MinorCode.HELLO),
-            payload=b"12345678",
-            src_flag=0x00,
-        )
-        writer.write(hello.encode())
-        await writer.drain()
-        await asyncio.wait_for(_read_frame(reader), 1.0)  # HELLO_ACK
-
-        with caplog.at_level(logging.ERROR, logger="spcedp"):
-            ev = Frame(
-                src_id=PANEL_ID,
-                dst_id=RECEIVER_ID,
-                sequence=2,
-                major=int(MajorCode.EVENT),
-                minor=int(MinorCode.EVENT_PUSH),
-                payload=b"E2[#1000|08521203062026|BA|0|Burglar||0]",
-                src_flag=0x00,
-            )
-            writer.write(ev.encode())
-            await writer.drain()
-            await asyncio.wait_for(_read_frame(reader), 1.0)  # EVENT_ACK still sent
-
-            # The raising callback must not kill the session: a later POLL is
-            # still answered.
-            poll = Frame(
-                src_id=PANEL_ID,
-                dst_id=RECEIVER_ID,
-                sequence=3,
-                major=int(MajorCode.SESSION),
-                minor=int(MinorCode.POLL),
-                payload=b"abcdefgh",
-                src_flag=0x00,
-            )
-            writer.write(poll.encode())
-            await writer.drain()
-            ack = await asyncio.wait_for(_read_frame(reader), 1.0)
-            assert ack.minor == MinorCode.POLL_ACK
-
-            await _wait_for(
-                lambda: any("on_event callback raised" in r.message for r in caplog.records)
-            )
-
-        writer.close()
-        await writer.wait_closed()
-        await asyncio.sleep(0.05)
+@pytest.mark.parametrize("area_id", [-1, 0, 256, 257])
+async def test_invalid_area_id_is_rejected_without_sending(area_id: int) -> None:
+    """An out-of-range ID must not wrap and arm a different area."""
+    sess, writer, server, wt = _make_session()
+    try:
+        with pytest.raises(ValueError, match="Area ID"):
+            await sess.binary_command(BinaryOp.AREA_SET, area_id)
+        assert not writer.written
+        assert sess._write_queue.empty()
+    finally:
+        await _cancel(wt)

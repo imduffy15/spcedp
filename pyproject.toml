@@ -1,6 +1,6 @@
 [project]
 name = "spcedp"
-version = "2.0.1"
+version = "3.0.0"
 description = "Async Python SDK for Vanderbilt SPC alarm panels (direct EDP v2)"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -105,7 +105,7 @@ disable = [
 
 [tool.mypy]
 python_version = "3.14"
-files = ["spcedp", "scripts"]
+files = ["spcedp", "scripts", "examples"]
 strict = true
 
 [tool.bandit]

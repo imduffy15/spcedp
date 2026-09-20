@@ -6,7 +6,6 @@ import enum
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from .client import Session
 from .commands import (
@@ -125,11 +124,9 @@ class PanelInfo:
     type: str = ""
     variant: str = ""
     version: str = ""
-    device_id: str = ""
     sn: str = ""
     hw_ver_major: str = ""
     hw_ver_minor: str = ""
-    license_key: str = ""
 
     @classmethod
     def from_row(cls, row: Row) -> PanelInfo:
@@ -137,32 +134,19 @@ class PanelInfo:
             type=row.get("TYPE", ""),
             variant=row.get("VARIANT", ""),
             version=row.get("VERSION", ""),
-            device_id=row.get("DEVICE-ID", ""),
             sn=row.get("SN", ""),
             hw_ver_major=row.get("HW_VER_MAJOR", ""),
             hw_ver_minor=row.get("HW_VER_MINOR", ""),
-            license_key=row.get("LICENSE_KEY", ""),
         )
 
 
 @dataclass(slots=True)
 class Area:
-    """One alarm area and its live arm state.
-
-    String fields hold the panel's raw values.  `mode` is "0"=unset,
-    "1"=part-set A, "2"=part-set B, "3"=full-set.  The `last_*` fields and
-    `not_ready_set` are passed through verbatim from the panel.
-    """
+    """One alarm area and its live arm state."""
 
     id: int
     name: str = ""
     mode: str = ""
-    last_set_time: str = ""
-    last_unset_time: str = ""
-    last_unset_user_id: str = ""
-    last_unset_user_name: str = ""
-    last_alarm: str = ""
-    not_ready_set: str = ""
     triggered: bool = False
 
     @property
@@ -198,53 +182,25 @@ class Area:
             id=area_id,
             name=row.get("NAME", ""),
             mode=row.get("MODE", ""),
-            last_set_time=row.get("LAST_SET_TIME", ""),
-            last_unset_time=row.get("LAST_UNSET_TIME", ""),
-            last_unset_user_id=row.get("LAST_UNSET_USER_ID", ""),
-            last_unset_user_name=row.get("LAST_UNSET_USER_NAME", ""),
-            last_alarm=row.get("LAST_ALARM", ""),
-            not_ready_set=row.get("NOT_READY_SET", ""),
         )
 
 
 @dataclass(slots=True)
 class Zone:
-    """One detection zone.
-
-    `type`, `status`, `proc_state`, `input` and `logic_input` are the
-    panel's raw strings (e.g. `status` "0"=closed / "1"=open / "2"=isolated).
-    The `*_allowed` booleans are derived from the panel's "1"/"0" flags.
-    """
+    """One detection zone and its physical input state."""
 
     id: int
     type: str
     name: str
     area_id: int
-    area_name: str
     input: str
-    logic_input: str
-    status: str
-    proc_state: str
-    inhibit_allowed: bool
-    isolate_allowed: bool
 
     @property
     def is_open(self) -> bool | None:
-        """Return the physical open/closed state when the panel exposes it.
-
-        SPC4300 firmware reports the physical circuit in ``INPUT`` while
-        leaving ``STATUS`` at ``0`` in some normal open states. Prefer known
-        input values and retain status as a compatibility fallback.
-        """
+        """Return physical INPUT state; faults and missing values are unknown."""
         if self.input == ZoneInput.OPEN:
             return True
         if self.input == ZoneInput.CLOSED:
-            return False
-        if self.input:
-            return None
-        if self.status == "1":
-            return True
-        if self.status == "0":
             return False
         return None
 
@@ -282,13 +238,7 @@ class Zone:
             type=row.get("TYPE", ""),
             name=row.get("ZONE_NAME", ""),
             area_id=area_id,
-            area_name=row.get("AREA_NAME", ""),
             input=row.get("INPUT", ""),
-            logic_input=row.get("LOGIC_INPUT", ""),
-            status=row.get("STATUS", ""),
-            proc_state=row.get("PROC_STATE", ""),
-            inhibit_allowed=row.get("INHIBIT_ALLOWED") == "1",
-            isolate_allowed=row.get("ISOLATE_ALLOWED") == "1",
         )
 
 
@@ -298,13 +248,12 @@ class Panel:
     Consume reconcile_event() for pushed updates and refresh areas/zones
     periodically. A new connection needs a new Panel.from_session()."""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session) -> None:
         """Create an empty snapshot; prefer from_session()."""
         self._session = session
         self.info = PanelInfo()
         self.areas: dict[int, Area] = {}
         self.zones: dict[int, Zone] = {}
-        self.last_refresh: datetime | None = None
 
     @classmethod
     async def from_session(cls, session: Session, *, wait_polls: int = 1) -> Panel:
@@ -315,12 +264,11 @@ class Panel:
         return self
 
     async def refresh(self) -> None:
-        """Read identity, areas and zones and record the refresh time."""
+        """Read identity, areas and zones."""
         info = await self._session.xml_command(XML_INFO)
         self._apply_info(info)
         await self.refresh_areas()
         await self.refresh_zones()
-        self.last_refresh = datetime.now(UTC)
 
     async def refresh_areas(self) -> None:
         """Replace the area snapshot, preserving alarms until confirmed disarmed."""
@@ -386,11 +334,8 @@ class Panel:
             if zone is None:
                 log.debug("apply_event: %s for unknown zone %d; ignoring", code, target)
                 return EventStateUpdate()
-            zone.status = "1" if zone_open else "0"
             zone.input = "1" if zone_open else "0"
-            zone.logic_input = zone.input
-            zone.proc_state = zone.input
-            if ev.category == "alarm":
+            if code in {"BA", "FA", "PA", "HA", "TA"}:
                 area = self.areas.get(zone.area_id)
                 if area is not None:
                     area.triggered = True
@@ -438,7 +383,7 @@ class Panel:
 class AreaControl:
     """Arm / disarm controls (verified live)."""
 
-    def __init__(self, sess: Session, area_id: int):
+    def __init__(self, sess: Session, area_id: int) -> None:
         self._s = sess
         self._id = area_id
 

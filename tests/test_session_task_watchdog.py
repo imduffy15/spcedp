@@ -5,7 +5,7 @@ loop kept ACKing POLLs independently, so the link looked healthy while the
 application logic (arming, event handling) was dead and events were being
 enqueued-then-dropped. The fix attaches a done-callback to the session task
 that logs the crash *immediately* and tears the session down, mirroring the
-``on_event`` failure path.
+writer failure path.
 
 These tests drive the real ``PanelServer._handle`` loop over a loopback socket
 (the harness pattern from ``tests/test_session.py``) with an ``on_session`` that

@@ -4,7 +4,7 @@ Every public Session method must raise an ``SpcError`` subclass for each
 failure mode - never let a bare ``asyncio.TimeoutError``, ``ConnectionResetError``
 or ``ValueError`` escape. This pins the post-fix public hierarchy:
 
-  * non-OK reply code         -> PanelRejected (.code, .is_transient)
+  * non-OK reply code         -> PanelRejected (.code)
   * no reply within timeout   -> SpcTimeout
   * mid-command disconnect    -> SpcConnectionLost
   * runaway fragmentation /   -> SpcProtocolError
@@ -33,7 +33,7 @@ from test_session import (
 )
 
 from spcedp.client import MAX_XML_FRAGMENTS, PanelServer, Session
-from spcedp.commands import BinaryOp, PanelOp
+from spcedp.commands import BinaryOp
 from spcedp.errors import (
     PanelRejected,
     SpcConnectionLost,
@@ -77,12 +77,12 @@ async def _drive_binary_reply(
 
 
 # --------------------------------------------------------------------------- #
-# Non-OK reply code -> PanelRejected (with .code / .is_transient)
+# Non-OK reply code -> PanelRejected (with .code)
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("code", [0xF2, 0xFB, 0xFC, 0xFF])
-async def test_binary_non_ok_raises_panel_rejected_non_transient(code: int) -> None:
+@pytest.mark.parametrize("code", [0xF2, 0xF3, 0xF4, 0xF5, 0xFB, 0xFC, 0xFD, 0xFF])
+async def test_binary_non_ok_raises_panel_rejected(code: int) -> None:
     sess, writer, server, wt = _make_session()
     cmd = await _drive_binary_reply(
         sess, writer, server, op=BinaryOp.AREA_SET, reply_payload=bytes([code])
@@ -91,39 +91,6 @@ async def test_binary_non_ok_raises_panel_rejected_non_transient(code: int) -> N
         await asyncio.wait_for(cmd, 1.0)
     assert isinstance(exc.value, SpcError)
     assert exc.value.code == code
-    assert exc.value.is_transient is False
-    await _cancel(wt)
-
-
-@pytest.mark.parametrize("code", [0xF3, 0xF4, 0xF5])
-async def test_binary_non_ok_raises_panel_rejected_transient(code: int) -> None:
-    """0xF3/0xF4/0xF5 (panel waiting / engineer / not-possible-now) are transient."""
-    sess, writer, server, wt = _make_session()
-    cmd = await _drive_binary_reply(
-        sess, writer, server, op=BinaryOp.AREA_SET, reply_payload=bytes([code])
-    )
-    with pytest.raises(PanelRejected) as exc:
-        await asyncio.wait_for(cmd, 1.0)
-    assert isinstance(exc.value, SpcError)
-    assert exc.value.code == code
-    assert exc.value.is_transient is True
-    await _cancel(wt)
-
-
-async def test_panel_command_non_ok_raises_panel_rejected() -> None:
-    sess, writer, server, wt = _make_session()
-    cmd = asyncio.create_task(sess.panel_command(PanelOp.TEST, timeout=1.0))
-    await _wait_for(lambda: len(writer.written) >= 1)
-    req = Frame.decode(writer.written[-1])
-    server._dispatch(
-        sess,
-        _reply(req.sequence, b"\xff", major=MajorCode.PANEL_CMD, minor=MinorCode.PANEL_REPLY),
-    )
-    with pytest.raises(PanelRejected) as exc:
-        await asyncio.wait_for(cmd, 1.0)
-    assert isinstance(exc.value, SpcError)
-    assert exc.value.code == 0xFF
-    assert exc.value.is_transient is False
     await _cancel(wt)
 
 
@@ -146,16 +113,6 @@ async def test_xml_command_timeout_raises_spctimeout() -> None:
 async def test_binary_command_timeout_raises_spctimeout() -> None:
     sess, writer, server, wt = _make_session()
     cmd = asyncio.create_task(sess.binary_command(BinaryOp.AREA_SET, 1, timeout=0.05))
-    with pytest.raises(SpcTimeout) as exc:
-        await asyncio.wait_for(cmd, 1.0)
-    assert isinstance(exc.value, SpcError)
-    assert not isinstance(exc.value, asyncio.TimeoutError)
-    await _cancel(wt)
-
-
-async def test_panel_command_timeout_raises_spctimeout() -> None:
-    sess, writer, server, wt = _make_session()
-    cmd = asyncio.create_task(sess.panel_command(PanelOp.TEST, timeout=0.05))
     with pytest.raises(SpcTimeout) as exc:
         await asyncio.wait_for(cmd, 1.0)
     assert isinstance(exc.value, SpcError)
@@ -250,20 +207,6 @@ async def test_xml_command_disconnect_mid_command_raises_spcconnectionlost() -> 
 async def test_empty_binary_reply_raises_spcprotocolerror() -> None:
     sess, writer, server, wt = _make_session()
     cmd = await _drive_binary_reply(sess, writer, server, op=BinaryOp.AREA_SET, reply_payload=b"")
-    with pytest.raises(SpcProtocolError) as exc:
-        await asyncio.wait_for(cmd, 1.0)
-    assert isinstance(exc.value, SpcError)
-    await _cancel(wt)
-
-
-async def test_empty_panel_reply_raises_spcprotocolerror() -> None:
-    sess, writer, server, wt = _make_session()
-    cmd = asyncio.create_task(sess.panel_command(PanelOp.TEST, timeout=1.0))
-    await _wait_for(lambda: len(writer.written) >= 1)
-    req = Frame.decode(writer.written[-1])
-    server._dispatch(
-        sess, _reply(req.sequence, b"", major=MajorCode.PANEL_CMD, minor=MinorCode.PANEL_REPLY)
-    )
     with pytest.raises(SpcProtocolError) as exc:
         await asyncio.wait_for(cmd, 1.0)
     assert isinstance(exc.value, SpcError)

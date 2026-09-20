@@ -21,7 +21,6 @@ class FakeSession:
     def __init__(self, replies: dict) -> None:
         self._replies = replies
         self.binary_calls: list[tuple] = []
-        self.panel_calls: list = []
         self._events: asyncio.Queue[SiaEvent] = asyncio.Queue()
 
     async def wait_ready(self, min_polls: int = 1) -> None:
@@ -30,13 +29,8 @@ class FakeSession:
     async def xml_command(self, command_id: str, timeout: float = 5.0, **attrs):
         return self._replies.get(command_id, {})
 
-    async def binary_command(
-        self, op, target_id: int = 0, param: int = 0, timeout: float = 5.0
-    ) -> None:
-        self.binary_calls.append((op, target_id, param))
-
-    async def panel_command(self, op, timeout: float = 5.0) -> None:
-        self.panel_calls.append(op)
+    async def binary_command(self, op: BinaryOp, target_id: int, *, timeout: float = 5.0) -> None:
+        self.binary_calls.append((op, target_id))
 
     async def events(self):
         while True:
@@ -58,12 +52,9 @@ FULL_REPLIES = {
                 "ZONE_NAME": "Hall",
                 "TYPE": "1",
                 "AREA": "1",
-                "INHIBIT_ALLOWED": "1",
-                "ISOLATE_ALLOWED": "0",
             },
         ]
     },
-    "output_status": {"OUTPUT_STATUS": [{"ID": "2", "NAME": "Siren", "STATE": "0"}]},
 }
 
 
@@ -76,8 +67,6 @@ async def test_refresh_builds_object_graph() -> None:
     zone = panel.zones[5]
     assert zone.name == "Hall"
     assert zone.area_id == 1
-    assert zone.inhibit_allowed is True
-    assert zone.isolate_allowed is False
 
 
 async def test_refresh_skips_rows_with_missing_or_bad_id() -> None:
@@ -105,10 +94,10 @@ async def test_alarm_controls_emit_correct_opcodes() -> None:
     await panel.area(2).set_b()
     await panel.area(2).unset()
     assert sess.binary_calls == [
-        (BinaryOp.AREA_SET, 2, 0),
-        (BinaryOp.AREA_SET_A, 2, 0),
-        (BinaryOp.AREA_SET_B, 2, 0),
-        (BinaryOp.AREA_UNSET, 2, 0),
+        (BinaryOp.AREA_SET, 2),
+        (BinaryOp.AREA_SET_A, 2),
+        (BinaryOp.AREA_SET_B, 2),
+        (BinaryOp.AREA_UNSET, 2),
     ]
 
 

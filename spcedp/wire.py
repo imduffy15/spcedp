@@ -1,36 +1,4 @@
-"""EDP v2 wire format.
-
-Reverse-engineered (black-box) from live captures against an SPC4300
-panel. All multi-byte integers are little-endian.
-
-Frame layout (23-byte header + variable payload):
-
-    offset  size  field
-     0-1    2     remaining-length      total bytes = 2 + this
-     2      1     protocol byte         constant 0x45 ('E')
-     3      1     version               0x02
-     4      1     source flag           0x00 if src is panel, 0x08 if receiver
-     5-8    4     sequence number       request and reply share the same seq
-     9-12   4     source ID
-    13-16   4     destination ID
-    17      1     major code
-    18      1     minor code
-    19-20   2     checksum              not validated by the panel
-    21-22   2     payload length
-    23..   var    payload
-
-Two command families seen on the wire:
-
-  major=10 ("XML")    request payload `\\x01<COMMAND ID="..." />`
-                      reply payload   `\\x01<COMMAND_REPLY>...</COMMAND_REPLY>`
-                      large replies are fragmented; the first chunk is tagged
-                      with 0x01 ("first") and subsequent chunks 0x02
-                      ("continuation"). To pull continuations the requester
-                      re-sends the same XML command prefixed with 0x02.
-
-  major=4 ("binary")  request payload `<opcode> <target_id> <param>`
-                      reply payload   1 byte status code (0xF0 = OK, 0xFC = nyi)
-"""
+"""EDP v2 framing, checksums and encryption. See PROTOCOL.md for the wire layout."""
 
 from __future__ import annotations
 
@@ -64,12 +32,7 @@ AES_BLOCK_SIZE = 16
 
 
 class FrameDecodeError(ValueError):
-    """A frame could not be decoded.
-
-    Recoverable: the stream decoder logs and resyncs past the offending
-    bytes rather than tearing the connection down.  Subclasses ValueError
-    so callers expecting the historical ValueError contract still catch it.
-    """
+    """Invalid frame data; the stream decoder can resync after a corrupt frame."""
 
 
 class EncryptionRequired(FrameDecodeError):
@@ -82,7 +45,7 @@ class EncryptionRequired(FrameDecodeError):
     """
 
 
-# EDP frame checksum parameters (reverse-engineered; see PROTOCOL.md §2.5
+# EDP frame checksum parameters (reverse-engineered; see PROTOCOL.md
 # for the algorithm).
 _CSUM_INIT = 0xFFFF
 _CSUM_POLY = 0xA097
@@ -129,8 +92,7 @@ def edp_checksum(struct_bytes: bytes, dlen: int) -> int:
 class MajorCode(enum.IntEnum):
     SESSION = 1  # POLL / HELLO
     EVENT = 2  # SIA event push from panel
-    BINARY_CMD = 4  # 3-byte (op,target,param) or 1-byte (op) writes
-    PANEL_CMD = 5  # panel-wide commands (reset, test); 1-byte payload
+    BINARY_CMD = 4  # 3-byte (opcode, area ID, zero) writes
     XML_CMD = 10  # <COMMAND ID="..." /> XML
 
 
@@ -147,7 +109,6 @@ class MinorCode(enum.IntEnum):
     REQUEST = 0
     REPLY = 1
     BINARY_REPLY = 2  # major=4 replies
-    PANEL_REPLY = 1  # major=5 replies; alias of REPLY, named for the dispatch site
 
 
 @dataclass(slots=True)

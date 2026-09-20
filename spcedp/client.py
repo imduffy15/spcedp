@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any
 
-from .commands import BinaryCommand, BinaryOp, PanelOp
+from .commands import BinaryOp
 from .errors import (
     PanelRejected,
     ReplyCode,
@@ -69,18 +69,7 @@ WRITE_QUEUE_MAXSIZE = 2048
 
 @dataclass(slots=True)
 class Session:
-    """One panel-side TCP connection.
-
-    Created by PanelServer for each inbound connection and handed to the
-    user's on_session / on_event callbacks.  Holds the request/reply
-    correlation state, the outbound write queue, and the SIA event feed.
-
-    NOTE: the constructor (field set and order) is NOT part of the public
-    API - only PanelServer constructs Session, and the field layout may
-    change between 0.x releases.  The contractual surface for callbacks is
-    the public method set: xml_command, binary_command, panel_command,
-    events, and wait_ready.
-    """
+    """One connection, with serialized commands and an async SIA event stream."""
 
     panel_id: int
     receiver_id: int
@@ -99,7 +88,6 @@ class Session:
     _write_queue: asyncio.Queue[bytes] = field(
         default_factory=lambda: asyncio.Queue(maxsize=WRITE_QUEUE_MAXSIZE)
     )
-    _tasks: set[asyncio.Task[None]] = field(default_factory=set)
     _closed: asyncio.Event = field(default_factory=asyncio.Event)
     _poll_count: int = 0
     _command_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -290,53 +278,13 @@ class Session:
                 f"after {MAX_XML_FRAGMENTS} fragments"
             )
 
-    async def binary_command(
-        self,
-        op: BinaryOp | int,
-        target_id: int = 0,
-        param: int = 0,
-        timeout: float = 5.0,
-    ) -> None:
-        """Issue a binary command; raise PanelRejected unless the panel replies OK.
-
-        Also raises SpcTimeout / SpcConnectionLost / SpcProtocolError (all
-        SpcError subclasses) on timeout, disconnect, or a malformed reply.
-        """
-        body = BinaryCommand(op, target_id, param).encode()
-        await self._major_command(
-            major=int(MajorCode.BINARY_CMD),
-            body=body,
-            label=f"op={op} target={target_id} param={param}",
-            timeout=timeout,
-        )
-
-    async def panel_command(
-        self,
-        op: PanelOp | int,
-        timeout: float = 5.0,
-    ) -> None:
-        """Issue a panel-wide command (`major=5`); raise PanelRejected unless OK.
-
-        Used for the panel reset and self-test actions.  The request is a
-        1-byte opcode payload and the reply a 1-byte status code, like the
-        binary channel.  Also raises SpcTimeout / SpcConnectionLost /
-        SpcProtocolError on timeout, disconnect, or a malformed reply.
-        """
-        await self._major_command(
-            major=int(MajorCode.PANEL_CMD),
-            body=bytes([int(op) & 0xFF]),
-            label=f"panel_op={op}",
-            timeout=timeout,
-        )
-
-    async def _major_command(
-        self,
-        *,
-        major: int,
-        body: bytes,
-        label: str,
-        timeout: float,
-    ) -> None:
+    async def binary_command(self, op: BinaryOp, target_id: int, *, timeout: float = 5.0) -> None:
+        """Arm or disarm an area; raise PanelRejected unless the panel replies OK."""
+        if not 1 <= target_id <= 255:
+            raise ValueError("Area ID must be between 1 and 255")
+        op = BinaryOp(op)
+        body = bytes([op, target_id, 0])
+        label = f"{op.name} area={target_id}"
         async with self._command_lock:
             if self._closed.is_set():
                 raise SpcConnectionLost("panel disconnected")
@@ -346,7 +294,7 @@ class Session:
             self._pending_bin[seq] = fut
             self._send(
                 self._frame(
-                    major=major,
+                    major=int(MajorCode.BINARY_CMD),
                     minor=int(MinorCode.REQUEST),
                     payload=body,
                     sequence=seq,
@@ -456,7 +404,6 @@ class PanelServer:
         port: int = 50000,
         key: bytes | str | None = None,
         idle_timeout: float | None = DEFAULT_IDLE_TIMEOUT,
-        on_event: Callable[[Session, SiaEvent], Coroutine[Any, Any, None]] | None = None,
         on_session: Callable[[Session], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         """If `key` is provided, the receiver speaks EDP encryption.  Pass
@@ -471,7 +418,6 @@ class PanelServer:
         self.port = port
         self.key = self._normalise_key(key)
         self.idle_timeout = idle_timeout
-        self._on_event = on_event
         self._on_session = on_session
         self._server: asyncio.base_events.Server | None = None
         self._handlers: set[asyncio.Task[None]] = set()
@@ -582,7 +528,7 @@ class PanelServer:
                         session_task = asyncio.create_task(self._on_session(session))
                         # A crashed on_session is invisible (POLLs keep being
                         # ACKed) until teardown; log it immediately and tear the
-                        # session down, mirroring on_event's failure logging.
+                        # session down.
                         session_task.add_done_callback(
                             lambda t: self._on_session_done(t, session, peer)
                         )
@@ -656,7 +602,7 @@ class PanelServer:
         session.fail_pending(SpcConnectionLost("panel disconnected"))
         session.request_teardown()
         # Cancel and await background tasks before closing the socket.
-        pending = [t for t in (*tasks, *session._tasks) if t is not None]
+        pending = [t for t in tasks if t is not None]
         for t in pending:
             t.cancel()
         for t in pending:
@@ -679,9 +625,7 @@ class PanelServer:
             if fut is not None and not fut.done():
                 fut.set_result(frame.payload)
             return
-        if (frame.major == MajorCode.BINARY_CMD and frame.minor == MinorCode.BINARY_REPLY) or (
-            frame.major == MajorCode.PANEL_CMD and frame.minor == MinorCode.PANEL_REPLY
-        ):
+        if frame.major == MajorCode.BINARY_CMD and frame.minor == MinorCode.BINARY_REPLY:
             fut = sess._pending_bin.pop(frame.sequence, None)
             if fut is not None and not fut.done():
                 fut.set_result(frame.payload)
@@ -704,19 +648,6 @@ class PanelServer:
                 log.warning("unparseable SIA payload: %r", frame.payload)
                 return
             sess.emit_event(event)
-            if self._on_event is not None:
-                # Retain the task (the loop only weakly refs running tasks);
-                # _run_event_callback logs any failure.
-                task = asyncio.create_task(self._run_event_callback(sess, event))
-                sess._tasks.add(task)
-                task.add_done_callback(sess._tasks.discard)
             return
 
         log.debug("unhandled %s payload=%r", frame.kind, frame.payload[:40])
-
-    async def _run_event_callback(self, sess: Session, event: SiaEvent) -> None:
-        assert self._on_event is not None
-        try:
-            await self._on_event(sess, event)
-        except Exception:
-            log.exception("on_event callback raised")

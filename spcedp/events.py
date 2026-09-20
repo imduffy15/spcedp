@@ -1,22 +1,7 @@
-"""SIA event payload parsing.
+"""Parse SIA events without losing alarm data to clock or description quirks.
 
-Panel-pushed events arrive as major=2 (EVENT) frames with an ASCII payload
-in this shape:
-
-    E2[#<spc_id>|<HHMMSSDDMMYYYY>|<sia_code>|<address>|<description>|<extra>|<verification_id>]
-
-There are four leading fixed fields (spc_id, timestamp, sia_code, address),
-two trailing fixed fields (extra, verification_id), and <description> in the
-middle. The free-text description may itself contain '|', so we right-anchor
-the trailing fields rather than splitting left-to-right.
-
-Examples seen on the wire:
-
-    E2[#1000|08521203062026|NT|0|IP Link Fail||0]
-    E2[#1000|08521703062026|NR|0|IP Link Restore||0]
-    E2[#1000|09153403062026|NR|0|IP Link Restore||0]
-
-We tolerate trailing whitespace, missing fields, and unknown SIA codes.
+Descriptions may contain field delimiters; trailing fields are right-anchored.
+See PROTOCOL.md for the payload format.
 """
 
 from __future__ import annotations
@@ -25,48 +10,14 @@ import datetime as dt
 import logging
 import re
 from dataclasses import dataclass
-from zoneinfo import ZoneInfo
 
 log = logging.getLogger("spcedp")
 
 # Match only the fixed structure: the E2[#...] envelope, the spc_id, and the
 # 14-digit timestamp. Everything after the timestamp is captured raw and split
 # by a right-anchored rsplit so an interior '|' in the free-text description
-# cannot shift the trailing fixed fields (extra, verification_id). H3.
+# cannot shift the trailing fixed fields (extra, verification_id).
 _ENVELOPE = re.compile(r"^E2\[#(?P<spc>\d+)\|(?P<ts>\d{14})\|(?P<rest>.*)\]$", re.DOTALL)
-
-# A SMALL, deliberately PARTIAL SIA code -> category map. The full catalogue is
-# a documented live task (provoke-and-catalogue); this covers the codes already
-# seen plus the obvious self-restoring families. Unknown codes -> "unknown".
-_SIA_CATEGORY: dict[str, str] = {
-    # alarm
-    "BA": "alarm",  # burglary alarm
-    "FA": "alarm",  # fire alarm
-    "PA": "alarm",  # panic alarm
-    "HA": "alarm",  # holdup alarm
-    "TA": "alarm",  # tamper alarm
-    # restore
-    "BR": "restore",  # burglary restore
-    "FR": "restore",  # fire restore
-    "TR": "restore",  # tamper restore
-    "NR": "restore",  # network/IP link restore (seen on the wire)
-    # trouble
-    "NT": "trouble",  # network/IP link fail (seen on the wire)
-    "YT": "trouble",  # battery trouble
-    "AT": "trouble",  # AC/mains fail
-    "AR": "restore",  # AC/mains restore
-    "YR": "restore",  # battery restore
-    "ZO": "trouble",  # zone open (non-alarm)
-    "ZC": "restore",  # zone close (non-alarm)
-    # access (arm/disarm/login)
-    "OP": "access",  # opening / disarm
-    "CL": "access",  # closing / arm
-    "OG": "access",  # operator login
-    "OL": "access",  # operator logout
-    # test
-    "RP": "test",  # automatic test
-    "RX": "test",  # manual test
-}
 
 
 @dataclass(slots=True)
@@ -80,28 +31,15 @@ class SiaEvent:
     verification_id: str
     extra: str = ""
 
-    @property
-    def category(self) -> str:
-        """Coarse SIA category for ``sia_code``.
-
-        Backed by a small, partial map (see ``_SIA_CATEGORY``); returns
-        "unknown" for codes not yet catalogued. ``sia_code`` stays the source
-        of truth.
-        """
-        return _SIA_CATEGORY.get(self.sia_code.upper(), "unknown")
-
     @classmethod
-    def parse(cls, payload: bytes | str, *, panel_tz: ZoneInfo | None = None) -> SiaEvent:
+    def parse(cls, payload: bytes | str) -> SiaEvent:
         """Parse an ``E2[...]`` SIA event payload.
 
         Right-anchors the trailing fixed fields so an interior '|' in the
-        free-text description cannot corrupt ``extra``/``verification_id`` (H3).
+        free-text description cannot corrupt ``extra``/``verification_id``.
 
-        If ``panel_tz`` is given, ``timestamp`` is returned timezone-aware in
-        that zone (with ``fold`` handling for ambiguous wall-clock times during
-        a DST fall-back); when ``None`` (the default), ``timestamp`` stays naive
-        to preserve backward call compatibility. The host timezone is never
-        guessed. ``timestamp_raw`` always holds the original 14-char string.
+        Timestamps are naive panel-local wall time; the protocol carries no timezone.
+        ``timestamp_raw`` preserves the original value even if the clock is invalid.
 
         Raises ``ValueError`` for genuinely non-matching payloads.
         """
@@ -134,7 +72,7 @@ class SiaEvent:
         desc, extra, vid = trailing
 
         ts_raw = m["ts"]
-        ts = cls._parse_timestamp(ts_raw, panel_tz)
+        ts = cls._parse_timestamp(ts_raw)
 
         return cls(
             spc_id=int(m["spc"]),
@@ -148,12 +86,11 @@ class SiaEvent:
         )
 
     @staticmethod
-    def _parse_timestamp(ts_raw: str, panel_tz: ZoneInfo | None) -> dt.datetime | None:
+    def _parse_timestamp(ts_raw: str) -> dt.datetime | None:
         """Build a datetime from the 14-char HHMMSSDDMMYYYY layout.
 
         Returns ``None`` (and logs) for an out-of-range clock value so the event
-        is kept, never dropped. When ``panel_tz`` is given the result is
-        timezone-aware with ``fold`` handling.
+        is kept, never dropped.
         """
         try:
             ts = dt.datetime(
@@ -167,9 +104,4 @@ class SiaEvent:
         except ValueError:
             log.warning("SIA event has an out-of-range timestamp %r; keeping event", ts_raw)
             return None
-        if panel_tz is not None:
-            # Attach the panel zone. fold=0 picks the first (pre-transition)
-            # occurrence of an ambiguous wall-clock time during a DST fall-back;
-            # callers comparing two such events get distinct aware instants.
-            ts = ts.replace(tzinfo=panel_tz, fold=0)
         return ts

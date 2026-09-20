@@ -12,16 +12,16 @@ uv add git+https://github.com/imduffy15/spcedp.git
 
 ```python
 import asyncio
-from spcedp import Panel, PanelServer
+from spcedp import Panel, PanelServer, Session
 
 
-async def connected(session):
+async def connected(session: Session) -> None:
     panel = await Panel.from_session(session)
     print(panel.info.type, panel.info.version)
     for zone in panel.zones.values():
         print(zone.id, zone.name, zone.is_open)
 
-    async def refresh():
+    async def refresh() -> None:
         while True:
             await asyncio.sleep(30)
             await panel.refresh_areas()
@@ -37,7 +37,7 @@ async def connected(session):
         await asyncio.gather(refresh_task, return_exceptions=True)
 
 
-async def main():
+async def main() -> None:
     async with PanelServer(receiver_id=1001, port=50000, on_session=connected) as server:
         await server.serve_forever()
 
@@ -54,10 +54,8 @@ the receiver's matching 32-hex-digit key as `PanelServer(..., key=...)`.
 
 `Panel.from_session()` waits for the first poll and reads identity, areas and
 zones. `zones` and `areas` are snapshots; refresh replaces their contents.
-`Zone.is_open` prefers physical `INPUT` over `STATUS` and returns `None` when
-the physical input reports a fault or neither field gives a known state.
-`STATUS` is only a fallback when `INPUT` is absent. `Area.arm_mode` is an `ArmMode` or
-`None` for missing or unknown modes.
+`Zone.is_open` reads physical `INPUT` and returns `None` for faults or missing
+values. `Area.arm_mode` is an `ArmMode` or `None` for missing or unknown modes.
 
 `reconcile_event()` applies zone events immediately and reads current area
 state for ambiguous arm/disarm events. Refresh areas and zones periodically
@@ -84,10 +82,6 @@ failures. All inherit `SpcError`. A timeout does not prove a command failed:
 read the state before retrying. The `on_session` callback runs for each new
 connection; build a fresh `Panel` there. Leaving the server context closes
 its accepted connections too.
-
-Version 2 removes the high-level door/output/zone-maintenance and panel-reset
-APIs. The supported facade is sensors and area arming; low-level `Session`
-commands and [protocol notes](PROTOCOL.md) remain for protocol work.
 
 ## Development
 

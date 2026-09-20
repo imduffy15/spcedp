@@ -76,6 +76,8 @@ await panel.area(1).unset()  # disarm
 await panel.refresh_areas()  # read the confirmed state
 ```
 
+Commands are serialized and wait for a short pause in incoming traffic so
+panel event bursts cannot collide with command sequence numbers.
 Commands wait for the panel's reply. `PanelRejected` contains its rejection
 code; `SpcTimeout`, `SpcConnectionLost` and `SpcProtocolError` report communication
 failures. All inherit `SpcError`. A timeout does not prove a command failed:

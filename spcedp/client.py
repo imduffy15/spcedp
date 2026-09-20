@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import logging
 import ssl
+import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from dataclasses import dataclass, field
 from types import TracebackType
@@ -52,6 +53,8 @@ EVENT_QUEUE_MAXSIZE = 1024
 # Backstop on a single fragmented XML reply, so a panel that never closes
 # </COMMAND_REPLY> can't spin xml_command forever.
 MAX_XML_FRAGMENTS = 64
+# The panel queues event bursts after replies/ACKs in the shared sequence space.
+COMMAND_QUIET_TIME = 0.1
 # Disconnect a peer that sends nothing for this long; the panel polls ~10s.
 DEFAULT_IDLE_TIMEOUT = 120.0
 # Warn (rising edge) if the outbound queue backs up this far - a peer not
@@ -99,6 +102,8 @@ class Session:
     _tasks: set[asyncio.Task[None]] = field(default_factory=set)
     _closed: asyncio.Event = field(default_factory=asyncio.Event)
     _poll_count: int = 0
+    _command_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _last_received: float = field(default=0.0, repr=False)
     # True once a WRITE_QUEUE_WARN rising-edge has been logged; reset when the
     # queue drains back below the threshold so the warning re-arms.
     _write_warned: bool = field(default=False, repr=False)
@@ -241,47 +246,49 @@ class Session:
         reply in `timeout`, SpcConnectionLost if the link drops mid-command,
         SpcProtocolError if the reply never closes / parses.
         """
-        if self._closed.is_set():
-            raise SpcConnectionLost("panel disconnected")
-        assembler = ReplyAssembler()
-        first = True
-        for _ in range(MAX_XML_FRAGMENTS):
-            seq = self._alloc_seq()
-            payload = build_request(command_id, continuation=not first, **attrs)
-            fut: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
-            self._pending_xml[seq] = fut
-            self._send(
-                self._frame(
-                    major=int(MajorCode.XML_CMD),
-                    minor=int(MinorCode.REQUEST),
-                    payload=payload,
-                    sequence=seq,
+        async with self._command_lock:
+            if self._closed.is_set():
+                raise SpcConnectionLost("panel disconnected")
+            assembler = ReplyAssembler()
+            first = True
+            for _ in range(MAX_XML_FRAGMENTS):
+                await self._wait_to_send(timeout)
+                seq = self._alloc_seq()
+                payload = build_request(command_id, continuation=not first, **attrs)
+                fut: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+                self._pending_xml[seq] = fut
+                self._send(
+                    self._frame(
+                        major=int(MajorCode.XML_CMD),
+                        minor=int(MinorCode.REQUEST),
+                        payload=payload,
+                        sequence=seq,
+                    )
                 )
-            )
-            try:
-                reply_payload = await asyncio.wait_for(fut, timeout)
-            except TimeoutError as exc:
-                raise SpcTimeout(f"no XML reply for {command_id!r} within {timeout}s") from exc
-            finally:
-                self._pending_xml.pop(seq, None)
-            try:
-                assembled = assembler.feed(reply_payload)
-            except ValueError as exc:
-                raise SpcProtocolError(
-                    f"malformed XML reply fragment for {command_id!r}: {exc}"
-                ) from exc
-            if assembled is not None:
                 try:
-                    return parse_reply(assembled)
+                    reply_payload = await asyncio.wait_for(fut, timeout)
+                except TimeoutError as exc:
+                    raise SpcTimeout(f"no XML reply for {command_id!r} within {timeout}s") from exc
+                finally:
+                    self._pending_xml.pop(seq, None)
+                try:
+                    assembled = assembler.feed(reply_payload)
                 except ValueError as exc:
                     raise SpcProtocolError(
-                        f"could not parse XML reply for {command_id!r}: {exc}"
+                        f"malformed XML reply fragment for {command_id!r}: {exc}"
                     ) from exc
-            first = False
-        raise SpcProtocolError(
-            f"XML reply for {command_id!r} did not close </COMMAND_REPLY> "
-            f"after {MAX_XML_FRAGMENTS} fragments"
-        )
+                if assembled is not None:
+                    try:
+                        return parse_reply(assembled)
+                    except ValueError as exc:
+                        raise SpcProtocolError(
+                            f"could not parse XML reply for {command_id!r}: {exc}"
+                        ) from exc
+                first = False
+            raise SpcProtocolError(
+                f"XML reply for {command_id!r} did not close </COMMAND_REPLY> "
+                f"after {MAX_XML_FRAGMENTS} fragments"
+            )
 
     async def binary_command(
         self,
@@ -330,30 +337,47 @@ class Session:
         label: str,
         timeout: float,
     ) -> None:
+        async with self._command_lock:
+            if self._closed.is_set():
+                raise SpcConnectionLost("panel disconnected")
+            await self._wait_to_send(timeout)
+            seq = self._alloc_seq()
+            fut: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+            self._pending_bin[seq] = fut
+            self._send(
+                self._frame(
+                    major=major,
+                    minor=int(MinorCode.REQUEST),
+                    payload=body,
+                    sequence=seq,
+                )
+            )
+            try:
+                reply = await asyncio.wait_for(fut, timeout)
+            except TimeoutError as exc:
+                raise SpcTimeout(f"no reply within {timeout}s for {label!r}") from exc
+            finally:
+                self._pending_bin.pop(seq, None)
+            if not reply:
+                raise SpcProtocolError(f"empty command reply for {label!r}")
+            code = reply[0]
+            if code != ReplyCode.OK:
+                raise PanelRejected(code, command=label)
+
+    async def _wait_to_send(self, timeout: float) -> None:
+        """Let the panel finish its event burst before allocating a command sequence."""
+        try:
+            async with asyncio.timeout(timeout):
+                while (
+                    remaining := self._last_received + COMMAND_QUIET_TIME - time.monotonic()
+                ) > 0:
+                    if self._closed.is_set():
+                        raise SpcConnectionLost("panel disconnected")
+                    await asyncio.sleep(remaining)
+        except TimeoutError as exc:
+            raise SpcTimeout("panel did not become idle before the command timeout") from exc
         if self._closed.is_set():
             raise SpcConnectionLost("panel disconnected")
-        seq = self._alloc_seq()
-        fut: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
-        self._pending_bin[seq] = fut
-        self._send(
-            self._frame(
-                major=major,
-                minor=int(MinorCode.REQUEST),
-                payload=body,
-                sequence=seq,
-            )
-        )
-        try:
-            reply = await asyncio.wait_for(fut, timeout)
-        except TimeoutError as exc:
-            raise SpcTimeout(f"no reply within {timeout}s for {label!r}") from exc
-        finally:
-            self._pending_bin.pop(seq, None)
-        if not reply:
-            raise SpcProtocolError(f"empty command reply for {label!r}")
-        code = reply[0]
-        if code != ReplyCode.OK:
-            raise PanelRejected(code, command=label)
 
     def emit_event(self, event: SiaEvent) -> None:
         """Push a SIA event onto the events() stream.
@@ -546,9 +570,6 @@ class PanelServer:
                     if not handshake_started:
                         handshake_started = True
                         session.panel_id = frame.src_id
-                    # Keep our seq ahead of the panel's (shared space): reusing
-                    # its last seq makes the panel drop the link.
-                    session.next_seq = max(session.next_seq, frame.sequence)
                     # ACK before starting on_session, so the panel sees its
                     # HELLO_ACK before any of our commands. One malformed frame
                     # must not kill the read loop (and silence all ACKs), so
@@ -650,6 +671,8 @@ class PanelServer:
             await writer.wait_closed()
 
     def _dispatch(self, sess: Session, frame: Frame) -> None:
+        sess._last_received = time.monotonic()
+        sess.next_seq = max(sess.next_seq, frame.sequence)
         # Replies to our outstanding requests first.
         if frame.major == MajorCode.XML_CMD and frame.minor == MinorCode.REPLY:
             fut = sess._pending_xml.pop(frame.sequence, None)

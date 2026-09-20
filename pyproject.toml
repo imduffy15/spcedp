@@ -1,6 +1,6 @@
 [project]
 name = "spcedp"
-version = "2.0.0"
+version = "2.0.1"
 description = "Async Python SDK for Vanderbilt SPC alarm panels (direct EDP v2)"
 readme = "README.md"
 requires-python = ">=3.14"

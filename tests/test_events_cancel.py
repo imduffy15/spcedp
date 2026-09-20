@@ -1,22 +1,4 @@
-"""events() cancel-safety: a dequeued-but-not-yet-yielded event is not lost (L1).
-
-The events() async generator selects between the next queued event and session
-close with ``asyncio.wait`` and then yields the result. There are two windows in
-which the consumer's ``__anext__`` can be cancelled while an event has already
-been pulled off ``_events`` but not yet handed to the consumer:
-
-  1. The ``await asyncio.wait({get_task, closed_task})`` window, where the inner
-     ``_events.get()`` task has already completed (consumed an event) but the
-     outer ``__anext__`` task is cancelled before it resumes. The fix re-queues
-     the completed get's result (``_requeue_completed_get``).
-  2. The ``yield`` window, where the consumer closes the generator
-     (``GeneratorExit`` via ``aclose()``) after the event was dequeued. The fix
-     re-queues the event (``_requeue_event``).
-
-Both paths are safety-critical: an alarm event must never be silently dropped.
-These tests assert the post-fix CORRECT behaviour - the event survives the
-cancel and is delivered on the next iteration.
-"""
+"""Event delivery survives cancellation without replaying consumed events."""
 
 from __future__ import annotations
 
@@ -87,28 +69,14 @@ async def test_cancel_in_wait_window_does_not_lose_event() -> None:
     await _cancel(wt)
 
 
-async def test_aclose_during_yield_requeues_event() -> None:
-    """Closing the generator (GeneratorExit) after an event was dequeued but
-    while it is being yielded must re-queue the event rather than drop it."""
+async def test_closing_after_delivery_does_not_replay_event() -> None:
     sess, writer, server, wt = _make_session()
     ev = _event()
     sess.emit_event(ev)
-
     agen = sess.events()
-    got = await asyncio.wait_for(agen.__anext__(), 1.0)
-    assert got is ev
-    # The event is now dequeued and "in flight" at the yield point. Closing the
-    # generator here drives GeneratorExit through the yield; the fix re-queues
-    # the in-flight event so a later consumer still sees it.
-    assert sess._events.empty()
+    assert await anext(agen) is ev
     await agen.aclose()
-    assert sess._events.qsize() == 1
-
-    # A new consumer receives the re-queued event.
-    agen2 = sess.events()
-    got2 = await asyncio.wait_for(agen2.__anext__(), 1.0)
-    assert got2 is ev
-    await agen2.aclose()
+    assert sess._events.empty()
     await _cancel(wt)
 
 

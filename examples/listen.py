@@ -12,7 +12,6 @@ import logging
 
 from spcedp import Panel
 from spcedp.client import PanelServer, Session
-from spcedp.events import SiaEvent
 
 
 async def on_session(sess: Session) -> None:
@@ -23,12 +22,16 @@ async def on_session(sess: Session) -> None:
     )
     print(f"areas:   {[(a.id, a.name, a.mode) for a in panel.areas.values()]}")
     print(f"zones:   {len(panel.zones)} configured")
-    print(f"outputs: {[(o.id, o.name, o.state) for o in panel.outputs.values()]}")
 
-
-async def on_event(sess: Session, ev: SiaEvent) -> None:
-    when = ev.timestamp.isoformat() if ev.timestamp else "?"
-    print(f"event {when} {ev.sia_code} @addr={ev.address}: {ev.description}")
+    async for event in panel.events():
+        update = await panel.reconcile_event(event)
+        for zone_id in update.zone_ids:
+            zone = panel.zones[zone_id]
+            print(f"zone {zone.name}: {zone.is_open}")
+        for area_id in update.area_ids:
+            area = panel.areas.get(area_id)
+            if area is not None:
+                print(f"area {area.name}: {area.arm_mode}")
 
 
 async def main() -> None:
@@ -48,7 +51,6 @@ async def main() -> None:
         receiver_id=args.receiver_id,
         bind=args.bind,
         port=args.port,
-        on_event=on_event,
         on_session=on_session,
     ) as server:
         await server.serve_forever()

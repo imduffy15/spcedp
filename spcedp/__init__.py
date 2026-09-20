@@ -40,9 +40,7 @@ from .events import SiaEvent
 from .panel import (
     Area,
     ArmMode,
-    Door,
     EventStateUpdate,
-    Output,
     Panel,
     PanelInfo,
     Zone,
@@ -69,8 +67,6 @@ __all__ = [
     "ZoneType",
     "EventStateUpdate",
     "Zone",
-    "Output",
-    "Door",
     "SiaEvent",
     # Wire layer
     "Frame",

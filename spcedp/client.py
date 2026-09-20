@@ -110,6 +110,8 @@ class Session:
     async def wait_ready(self, min_polls: int = 1) -> None:
         """Wait until the panel has completed at least N polls post-HELLO."""
         while self._poll_count < min_polls:
+            if self._closed.is_set():
+                raise SpcConnectionLost("panel disconnected before ready")
             self._ready.clear()
             await self._ready.wait()
 
@@ -169,6 +171,7 @@ class Session:
         awaits so it stops and runs the normal teardown path. Idempotent.
         """
         self._closed.set()
+        self._ready.set()
         self._teardown_requested.set()
 
     async def _writer_loop(self) -> None:
@@ -238,6 +241,8 @@ class Session:
         reply in `timeout`, SpcConnectionLost if the link drops mid-command,
         SpcProtocolError if the reply never closes / parses.
         """
+        if self._closed.is_set():
+            raise SpcConnectionLost("panel disconnected")
         assembler = ReplyAssembler()
         first = True
         for _ in range(MAX_XML_FRAGMENTS):
@@ -325,6 +330,8 @@ class Session:
         label: str,
         timeout: float,
     ) -> None:
+        if self._closed.is_set():
+            raise SpcConnectionLost("panel disconnected")
         seq = self._alloc_seq()
         fut: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
         self._pending_bin[seq] = fut
@@ -366,50 +373,26 @@ class Session:
             )
 
     async def events(self) -> AsyncIterator[SiaEvent]:
-        """Stream SIA events as they arrive; ends when the session disconnects.
-
-        Once the connection is torn down, any buffered events are drained and
-        the iterator stops (rather than blocking forever on an empty queue).
-
-        Cancel-safe: if the consumer's __anext__ is cancelled in the window
-        after an event has been dequeued but before it is yielded, the event
-        is re-queued (to the front) so it is delivered on the next iteration
-        rather than silently lost.
-        """
-        # A result dequeued from a previous iteration that was not yet yielded
-        # (e.g. the yield was cancelled). Delivered first on the next pass.
-        pending_event: SiaEvent | None = None
+        """Yield buffered events once, ending when the session disconnects."""
         while True:
-            if pending_event is not None:
-                event, pending_event = pending_event, None
-            else:
-                get_task = asyncio.ensure_future(self._events.get())
-                closed_task = asyncio.ensure_future(self._closed.wait())
+            get_task = asyncio.create_task(self._events.get())
+            closed_task = asyncio.create_task(self._closed.wait())
+            try:
                 try:
                     await asyncio.wait({get_task, closed_task}, return_when=asyncio.FIRST_COMPLETED)
-                except asyncio.CancelledError:
-                    # Cancelled while waiting. If get_task already completed it
-                    # has consumed an event; re-queue it so it is not lost.
-                    self._requeue_completed_get(get_task)
+                finally:
                     closed_task.cancel()
-                    raise
-                closed_task.cancel()
-                if not get_task.done():
-                    # Session closed before an event arrived: cancel the get,
-                    # drain anything still queued, then stop.
-                    get_task.cancel()
-                    while not self._events.empty():
-                        yield self._events.get_nowait()
-                    return
-                event = get_task.result()
-            try:
-                yield event
-            except GeneratorExit:
-                # The async generator is being closed (consumer cancelled its
-                # __anext__ or stopped iterating). Re-queue the dequeued-but-
-                # unyielded event so a subsequent consumer still sees it.
-                self._requeue_event(event)
+                    if not get_task.done():
+                        get_task.cancel()
+                    await asyncio.gather(get_task, closed_task, return_exceptions=True)
+            except asyncio.CancelledError:
+                self._requeue_completed_get(get_task)
                 raise
+            if get_task.cancelled():
+                while not self._events.empty():
+                    yield self._events.get_nowait()
+                return
+            yield get_task.result()
 
     def _requeue_completed_get(self, get_task: asyncio.Future[SiaEvent]) -> None:
         """If a cancelled get task already pulled an event, put it back."""
@@ -422,9 +405,7 @@ class Session:
             self._requeue_event(get_task.result())
 
     def _requeue_event(self, event: SiaEvent) -> None:
-        """Re-insert an event at the front of the queue, dropping the oldest if
-        full, so a completed-but-unyielded event is delivered next instead of
-        being lost. Best-effort: keeps the safety-critical event in the feed."""
+        """Restore an undelivered event at the front, dropping the newest if full."""
         items: list[SiaEvent] = [event]
         with contextlib.suppress(asyncio.QueueEmpty):
             while True:
@@ -434,7 +415,7 @@ class Session:
                 self._events.put_nowait(item)
             except asyncio.QueueFull:
                 log.warning(
-                    "SIA event queue full re-queuing event (maxsize=%d); dropped oldest",
+                    "SIA event queue full re-queuing event (maxsize=%d); dropped newest",
                     EVENT_QUEUE_MAXSIZE,
                 )
                 break
@@ -469,6 +450,7 @@ class PanelServer:
         self._on_event = on_event
         self._on_session = on_session
         self._server: asyncio.base_events.Server | None = None
+        self._handlers: set[asyncio.Task] = set()
 
     @staticmethod
     def _normalise_key(key: bytes | str | None) -> bytes | None:
@@ -504,7 +486,11 @@ class PanelServer:
     ) -> None:
         if self._server is not None:
             self._server.close()
+            self._server.close_clients()
             await self._server.wait_closed()
+            if self._handlers:
+                await asyncio.gather(*self._handlers, return_exceptions=True)
+            self._server = None
 
     async def serve_forever(self) -> None:
         assert self._server is not None
@@ -512,6 +498,10 @@ class PanelServer:
             await self._server.serve_forever()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        handler = asyncio.current_task()
+        assert handler is not None
+        self._handlers.add(handler)
+        handler.add_done_callback(self._handlers.discard)
         peer = writer.get_extra_info("peername")
         log.info("connection from %s", peer)
         decoder = FrameDecoder(key=self.key)
@@ -581,35 +571,24 @@ class PanelServer:
             await self._teardown(session, decoder, writer, (writer_task, session_task), peer)
 
     async def _read_chunk(self, reader: asyncio.StreamReader, session: Session) -> bytes | None:
-        """Read one chunk, racing the idle timeout and a teardown request.
-
-        Returns the bytes read (possibly empty on EOF), or None if a teardown
-        was requested (writer died / on_session crashed) while we were blocked
-        on the socket so the read loop stops promptly rather than waiting out
-        the idle timeout. Raises asyncio.TimeoutError on idle timeout.
-        """
-        read_task = asyncio.ensure_future(reader.read(4096))
-        teardown_task = asyncio.ensure_future(session._teardown_requested.wait())
+        """Read until data, disconnect, or idle timeout; always reclaim both tasks."""
+        read_task = asyncio.create_task(reader.read(4096))
+        teardown_task = asyncio.create_task(session._teardown_requested.wait())
         try:
             done, _ = await asyncio.wait(
                 {read_task, teardown_task},
                 timeout=self.idle_timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if read_task in done:
+                return read_task.result()
+            if teardown_task in done:
+                return None
+            raise TimeoutError
         finally:
+            read_task.cancel()
             teardown_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await teardown_task
-        if read_task in done:
-            return read_task.result()
-        # The socket read did not complete: either teardown was requested or
-        # the idle timeout elapsed. Cancel the in-flight read either way.
-        read_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
-            await read_task
-        if session._teardown_requested.is_set():
-            return None
-        raise TimeoutError
+            await asyncio.gather(read_task, teardown_task, return_exceptions=True)
 
     def _on_writer_done(self, task: asyncio.Task, session: Session, peer: object) -> None:
         """Done-callback for the writer task: tear down on unexpected exit."""
@@ -654,8 +633,7 @@ class PanelServer:
         # block until their own timeout. Use SpcConnectionLost so awaiting
         # callers see a typed SDK error rather than a raw socket exception.
         session.fail_pending(SpcConnectionLost("panel disconnected"))
-        session._closed.set()
-        session._teardown_requested.set()
+        session.request_teardown()
         # Cancel and await background tasks before closing the socket.
         pending = [t for t in (*tasks, *session._tasks) if t is not None]
         for t in pending:
@@ -667,10 +645,6 @@ class PanelServer:
                 pass
             except Exception:
                 log.exception("background task failed during teardown")
-        # Flush frames queued but not yet written (the writer task is stopped now).
-        with contextlib.suppress(Exception):
-            while not session._write_queue.empty():
-                writer.write(session._write_queue.get_nowait())
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()

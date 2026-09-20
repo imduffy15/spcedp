@@ -273,50 +273,18 @@ def _drain_last(sess: Session) -> bytes:
     return last
 
 
-async def test_teardown_flushes_queued_frames_before_closing() -> None:
-    """Teardown must flush frames queued behind the stalled writer before close.
-
-    The writer task is stopped (cancelled) during teardown, so anything still in
-    ``_write_queue`` would be lost unless teardown drains it to the socket first.
-    ``PanelServer._teardown`` writes the residual queue then closes; assert every
-    queued frame reaches ``writer.write`` and ordering is preserved (the one
-    frame the writer popped first, then the flushed remainder), and the writer is
-    closed only after the flush.
-    """
+async def test_teardown_does_not_send_queued_commands() -> None:
+    """A failed connection must not flush delayed control commands on shutdown."""
     writer = StalledWriter()
     sess, server, wt = _make_session(writer)
+    for seq in range(10):
+        sess._send(_outbound(seq))
+    await _wait_for(lambda: len(writer.written) == 1)
+    assert sess._write_queue.qsize() == 9
 
-    # Enqueue a handful of frames. The writer pops the first and parks in drain;
-    # the rest sit in the queue waiting for a drain that never comes.
-    seqs = list(range(10))
-    for s in seqs:
-        sess._send(_outbound(s))
-    await _wait_for(lambda: len(writer.written) >= 1)
+    await server._teardown(sess, FrameDecoder(), writer, (wt, None), ("test", 0))
 
-    # The first frame was already written by the parked writer; the remaining
-    # nine are still queued and must be flushed by teardown.
     assert len(writer.written) == 1
-    queued_before = sess._write_queue.qsize()
-    assert queued_before == len(seqs) - 1
-
-    # Run the real teardown. It cancels the writer task, then flushes the queue
-    # to the socket before close(). Pass the writer task so teardown cancels it
-    # (matching PanelServer._handle's (writer_task, session_task) tuple).
-    decoder = FrameDecoder(key=None)
-    await server._teardown(sess, decoder, writer, (wt, None), ("test", 0))  # type: ignore[arg-type]
-
-    # Every queued frame was flushed: all 10 outbound frames reached the socket,
-    # in order, none dropped on shutdown.
-    assert len(writer.written) == len(seqs)
-    decoded = [Frame.decode(b) for b in writer.written]
-    assert [f.sequence for f in decoded] == seqs
-    assert all(f.minor == MinorCode.POLL_ACK for f in decoded)
-
-    # The queue is drained and the socket is closed (flush happened before close).
-    assert sess._write_queue.empty()
-    assert writer.closed is True
-
-    # Teardown also marked the session closed and cancelled the writer task.
+    assert writer.closed
     assert sess._closed.is_set()
-    assert sess._teardown_requested.is_set()
     assert wt.cancelled()

@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from spcedp.commands import BinaryOp, PanelOp
+from spcedp.commands import BinaryOp
 from spcedp.events import SiaEvent
 from spcedp.panel import Panel
 
@@ -78,7 +78,6 @@ async def test_refresh_builds_object_graph() -> None:
     assert zone.area_id == 1
     assert zone.inhibit_allowed is True
     assert zone.isolate_allowed is False
-    assert panel.outputs[2].name == "Siren"
 
 
 async def test_refresh_skips_rows_with_missing_or_bad_id() -> None:
@@ -98,27 +97,32 @@ async def test_refresh_skips_rows_with_missing_or_bad_id() -> None:
     assert panel2.areas == {}
 
 
-async def test_control_wrappers_emit_correct_opcodes() -> None:
+async def test_alarm_controls_emit_correct_opcodes() -> None:
     sess = FakeSession({})
     panel = Panel(sess)
-    await panel.zone(7).inhibit()
+    await panel.area(2).set()
+    await panel.area(2).set_a()
     await panel.area(2).set_b()
-    await panel.output(4).set()
-    await panel.door(3).open_permanent()
+    await panel.area(2).unset()
     assert sess.binary_calls == [
-        (BinaryOp.ZONE_INHIBIT, 7, 0),
+        (BinaryOp.AREA_SET, 2, 0),
+        (BinaryOp.AREA_SET_A, 2, 0),
         (BinaryOp.AREA_SET_B, 2, 0),
-        (BinaryOp.OUTPUT_SET, 4, 0),
-        (BinaryOp.DOOR_OPEN_PERMANENT, 3, 0),
+        (BinaryOp.AREA_UNSET, 2, 0),
     ]
 
 
-async def test_panel_reset_and_test_use_panel_channel() -> None:
-    sess = FakeSession({})
-    panel = Panel(sess)
-    await panel.reset()
-    await panel.test()
-    assert sess.panel_calls == [PanelOp.RESET, PanelOp.TEST]
+async def test_initial_read_only_requests_identity_areas_and_zones() -> None:
+    from unittest.mock import AsyncMock
+
+    sess = FakeSession(FULL_REPLIES)
+    sess.xml_command = AsyncMock(wraps=sess.xml_command)
+    await Panel.from_session(sess)
+    assert [call.args[0] for call in sess.xml_command.await_args_list] == [
+        "info",
+        "area_status",
+        "zone_status",
+    ]
 
 
 async def test_events_delegates_to_session_feed() -> None:

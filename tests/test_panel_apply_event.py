@@ -5,7 +5,7 @@ to assert the post-fix behaviour:
 
   * ``refresh*`` rebuilds the dicts wholesale, so a zone the panel stops
     reporting disappears instead of lingering as a stale ghost (M3).
-  * the typed accessors (``ArmMode``, ``Zone.is_open``, ``Output.is_active``)
+  * the typed accessors (``ArmMode``, ``Zone.is_open``, ``Zone.input_state``)
     map known tokens and return ``None`` for unknown ones, never a silent
     default (H4 surface).
   * ``Panel.apply_event`` reconciles ``zone.status`` / ``area.mode`` in place
@@ -20,7 +20,7 @@ from datetime import datetime
 import pytest
 
 from spcedp.events import SiaEvent
-from spcedp.panel import Area, ArmMode, Output, Panel, Zone, ZoneInput, ZoneType
+from spcedp.panel import Area, ArmMode, Panel, Zone, ZoneInput, ZoneType
 
 # This module mixes synchronous accessor tests with async refresh/apply_event
 # tests, so the asyncio mark is applied per-test rather than module-wide (under
@@ -187,14 +187,6 @@ def test_zone_with_malformed_area_is_still_available() -> None:
     assert zone.area_id == 0
 
 
-# --------------------------------------------------------------------------- H4: Output.is_active
-def test_output_is_active_typed_accessor() -> None:
-    assert Output(id=1, name="Siren", state="1").is_active is True
-    assert Output(id=1, name="Siren", state="0").is_active is False
-    assert Output(id=1, name="Siren", state="").is_active is None
-    assert Output(id=1, name="Siren", state="x").is_active is None
-
-
 # --------------------------------------------------------------------------- H2: apply_event zones
 @pytest.mark.asyncio
 async def test_apply_event_zone_open_close() -> None:
@@ -237,24 +229,18 @@ async def test_apply_event_unknown_zone_is_noop() -> None:
 
 
 # --------------------------------------------------------------------------- H2: apply_event areas
-@pytest.mark.asyncio
-async def test_apply_event_area_arm_disarm() -> None:
-    sess = FakeSession({"area_status": {"AREA_STATUS": [{"ID": "1", "NAME": "Home", "MODE": "0"}]}})
-    panel = Panel(sess)
-    await panel.refresh_areas()
-    assert panel.areas[1].mode == "0"
-    assert panel.areas[1].arm_mode is ArmMode.UNSET
+@pytest.mark.parametrize("code", ["OP", "CL"])
+def test_ambiguous_area_events_do_not_guess_mode_or_clear_alarm(code) -> None:
+    panel = Panel(FakeSession({}))
+    panel.areas[1] = Area(id=1, mode="2", triggered=True)
+    update = panel.apply_event(_ev(code, "1"))
+    assert not update.area_ids
+    assert panel.areas[1].arm_mode is ArmMode.PART_B
+    assert panel.areas[1].triggered
 
-    # CL = closing/arm -> recorded as FULL (the event does not carry part-set).
-    panel.apply_event(_ev("CL", "1"))
-    assert panel.areas[1].mode == ArmMode.FULL.value
-    assert panel.areas[1].arm_mode is ArmMode.FULL
-    assert panel.areas[1].is_armed is True
 
-    # OP = opening/disarm -> UNSET.
-    panel.apply_event(_ev("OP", "1"))
-    assert panel.areas[1].mode == ArmMode.UNSET.value
-    assert panel.areas[1].is_armed is False
+def test_missing_area_mode_is_unknown() -> None:
+    assert Area.from_row({"ID": "1"}).arm_mode is None
 
 
 @pytest.mark.asyncio
@@ -278,7 +264,8 @@ async def test_alarm_event_tracks_area_trigger_and_refresh_preserves_it() -> Non
     await panel.refresh_areas()
     assert panel.areas[1].triggered is True
 
-    panel.apply_event(_ev("OP", "1"))
+    sess.replies["area_status"] = {"AREA_STATUS": [{"ID": "1", "MODE": "0"}]}
+    await panel.reconcile_event(_ev("OP", "1"))
     assert panel.areas[1].triggered is False
 
 
@@ -384,3 +371,26 @@ async def test_reconcile_verified_alarm_marks_target_area_triggered() -> None:
     await panel.reconcile_event(_ev("BV", "1"))
 
     assert panel.areas[1].triggered is True
+
+
+@pytest.mark.parametrize("input_value", ["2", "3", "4", "5", "6", "7", "unknown"])
+def test_faulted_input_does_not_report_closed(input_value) -> None:
+    zone = _zone("0")
+    zone.input = input_value
+    assert zone.is_open is None
+
+
+@pytest.mark.asyncio
+async def test_failed_area_read_does_not_mutate_another_areas_alarm() -> None:
+    from unittest.mock import AsyncMock
+
+    from spcedp import SpcTimeout
+
+    sess = FakeSession({})
+    sess.xml_command = AsyncMock(side_effect=SpcTimeout("no reply"))
+    panel = Panel(sess)
+    panel.areas[1] = Area(id=1, mode="2", triggered=True)
+    with pytest.raises(SpcTimeout):
+        await panel.reconcile_event(_ev("OP", "1"))
+    assert panel.areas[1].triggered
+    assert panel.areas[1].arm_mode is ArmMode.PART_B

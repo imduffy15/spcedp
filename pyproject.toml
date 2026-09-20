@@ -1,6 +1,6 @@
 [project]
 name = "spcedp"
-version = "1.1.0"
+version = "2.0.0"
 description = "Async Python SDK for Vanderbilt SPC alarm panels (direct EDP v2)"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -92,7 +92,6 @@ max-line-length = 100
 max-locals = 18  # Frame.decode unpacks the header field-by-field
 max-returns = 9  # Panel.apply_event dispatches on a handful of SIA codes
 max-branches = 13  # PanelServer._dispatch routes every major/minor pair
-max-public-methods = 25  # Panel facades zones/areas/outputs/doors + reads
 
 [tool.pylint."messages control"]
 disable = [

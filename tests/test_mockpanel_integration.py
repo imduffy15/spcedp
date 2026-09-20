@@ -4,7 +4,7 @@ These tests close the gap that ``FakeSession`` (tests/test_panel.py) leaves open
 they drive the *whole* stack end to end over a real loopback socket - the panel
 dials in, completes a HELLO/POLL handshake, the receiver's ``on_session`` builds
 a :class:`~spcedp.Panel` via :meth:`Panel.from_session`, refreshes
-info/areas/zones/outputs (including a genuinely *fragmented* ZONE_STATUS that the
+info/areas/zones (including a genuinely *fragmented* ZONE_STATUS that the
 client must reassemble across continuation requests), and a binary control apply
 round-trips to an OK reply. Everything runs both in cleartext (``key=None``) and
 fully encrypted end to end (a 16-byte key: encrypted HELLO_ACK plus an encrypted
@@ -178,11 +178,11 @@ async def _run_full_session(key: bytes | None) -> tuple[Panel, list[bytes]]:
 
     async def on_session(sess: Session) -> None:
         # Build the high-level facade over the live session: this waits for the
-        # POLL, then issues info/area/zone(fragmented)/output/door reads.
+        # POLL, then issues info/area/zone(fragmented) reads.
         panel = await Panel.from_session(sess)
         built.append(panel)
-        # A binary control apply -> OK reply (ZONE_INHIBIT(1)).
-        await panel.zone(1).inhibit()
+        # A binary control apply -> OK reply (AREA_SET_A(1)).
+        await panel.area(1).set_a()
         done.set()
 
     server = PanelServer(
@@ -211,7 +211,7 @@ async def _run_full_session(key: bytes | None) -> tuple[Panel, list[bytes]]:
             assert poll_ack.minor == MinorCode.POLL_ACK
 
             # Now hand the inbound queue to the scripted responder, which answers
-            # the receiver's info/area/zone(fragmented)/output/door/binary
+            # the receiver's info/area/zone(fragmented)/binary
             # requests that on_session's Panel.from_session + control apply issue.
             serve = asyncio.create_task(_serve_refresh_and_control(panel, seen_bin))
 
@@ -233,7 +233,7 @@ async def _run_full_session(key: bytes | None) -> tuple[Panel, list[bytes]]:
 @pytest.mark.parametrize("key", [None, KEY], ids=["cleartext", "encrypted"])
 async def test_full_handshake_refresh_and_control(key: bytes | None) -> None:
     """End to end over a real socket: HELLO/POLL handshake, Panel.from_session
-    -> refresh (info/areas/zones/outputs from scripted XML incl. a FRAGMENTED
+    -> refresh (info/areas/zones from scripted XML incl. a FRAGMENTED
     zone_status the client reassembles), and a binary control apply -> OK.
 
     Run for both key=None and a 16-byte key, so the encrypted path (encrypted
@@ -263,14 +263,10 @@ async def test_full_handshake_refresh_and_control(key: bytes | None) -> None:
     assert panel.zones[3].name == "Garage"
     assert panel.zones[3].inhibit_allowed is False
 
-    # OUTPUT parsed.
-    assert panel.outputs[2].name == "Siren"
-    assert panel.outputs[2].is_active is False
-
     # The binary control apply reached the wire as a real 3-byte binary command
-    # (ZONE_INHIBIT=0x03, target=1, param=0) and completed without raising (OK
+    # (AREA_SET_A, target=1, param=0) and completed without raising (OK
     # reply). With a key, this also proves the request decrypted correctly.
-    assert seen_bin == [bytes([int(BinaryOp.ZONE_INHIBIT), 1, 0])]
+    assert seen_bin == [bytes([int(BinaryOp.AREA_SET_A), 1, 0])]
     assert panel.last_refresh is not None
 
 

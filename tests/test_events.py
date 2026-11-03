@@ -53,6 +53,14 @@ def test_parse_normalises_spc_description_separator() -> None:
     assert event.description == "BackDoor¦ZONE¦1¦Home"
 
 
+def test_parse_decodes_latin1_event_text() -> None:
+    """Captured from an SPC4300 (fw 3.14.1) with Swedish names."""
+    ev = SiaEvent.parse(b"E2[#4567|17523503112026|NR|0|IP l\xe4nk \xe5terst\xe4llning||0]")
+    assert ev.description == "IP länk återställning"
+    zone = SiaEvent.parse(b"E2[#4567|16480303112026|ZO|25|Entred\xf6rr\xa6ZONE\xa61\xa6Huset||0]")
+    assert zone.description == "Entredörr¦ZONE¦1¦Huset"
+
+
 def test_parse_out_of_range_timestamp_keeps_event() -> None:
     # Month 13 (HHMMSSDDMMYYYY): a panel clock glitch must not discard the
     # alarm - the event surfaces with timestamp=None.

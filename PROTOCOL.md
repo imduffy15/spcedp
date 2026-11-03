@@ -68,7 +68,8 @@ E2[#<panel_id>|<HHMMSSDDMMYYYY>|<code>|<address>|<description>|<extra>|<verifica
 ```
 
 Descriptions can contain `|`, so parse the final two fields from the right.
-Firmware also uses byte `0xA6` as a description separator. Timestamps are
+Event text is Latin-1, including non-ASCII names, and firmware uses byte
+`0xA6` (`¦`) as a description separator. Timestamps are
 panel-local wall time without a timezone. An invalid timestamp must not discard
 an otherwise valid alarm event.
 
